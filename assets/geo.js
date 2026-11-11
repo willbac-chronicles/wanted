@@ -11,10 +11,10 @@
   // Crée une carte dans `el` avec le périmètre ; renvoie { map, layer } où `layer` reçoit les marqueurs.
   function createMap(el) {
     const map = L.map(el, { zoomControl: true, attributionControl: true });
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-      maxZoom: 20,
-      subdomains: "abcd",
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    // Fond OpenStreetMap standard : sans clé d'API (CARTO en exige une désormais).
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
     map.setView(window.W.CFG.MAP_CENTER, window.W.CFG.MAP_ZOOM);
     const layer = L.layerGroup().addTo(map);
