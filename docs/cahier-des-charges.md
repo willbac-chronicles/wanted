@@ -41,7 +41,8 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
    - Minuteur du prochain ping, puis bouton **« Envoyer ma position »** pendant la fenêtre. [C]
    - Score de la manche, score total, indicateur d'immunité (2 min). [C]
    - Fil des messages de l'organisateur.
-   - [Ouvert] Afficher au joueur combien de chasseurs le poursuivent.
+   - Compteur **« N chasseurs à tes trousses »** (sans leur nom), mis à jour en direct, avec alerte quand il augmente. [C]
+   - **Point GPS en direct** du joueur sur la carte (dispersion et manche) : calculé sur le téléphone, jamais envoyé ; seuls les pings transmettent la position. [C]
 5. **Regroupement / fin** : classement intermédiaire, puis classement final.
 
 ## 4. Écran organisateur
@@ -138,7 +139,6 @@ Points de vigilance :
 
 ## 8. Points ouverts
 
-- [Ouvert] Afficher ou non au joueur le nombre de chasseurs qui le poursuivent.
 - [Ouvert] Montant de la pénalité hors périmètre.
 - [Ouvert] Date du jeu.
 - [Ouvert] Quêtes : à concevoir après l'équilibrage, hors v0.

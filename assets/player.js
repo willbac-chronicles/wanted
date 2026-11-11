@@ -12,6 +12,7 @@
   let lastMsgId = null;
   let codeHideTimer = null;
   let mapObj = null;
+  let liveDot = null;
   let sending = false;
   const notifiedPings = new Set();
   const notifiedSpotted = new Set();
@@ -33,7 +34,7 @@
     const key = [g.status, g.round, s.target ? s.target.pseudo + "|" + s.target.photo_path : "-"].join("#");
     if (key !== screenKey) {
       screenKey = key;
-      if (mapObj) { mapObj.map.remove(); mapObj = null; }
+      destroyMap();
       if (g.status === "accueil") renderWaiting();
       else if (g.status === "dispersion") renderDispersion();
       else if (g.status === "manche") renderRound();
@@ -131,8 +132,39 @@
         <p class="small muted">START à ${esc(fmtTime(state.game.start_at))}</p>
       </div>
       <div id="push-box"></div>
+      ${mapCard("Reste dans le périmètre pointillé.")}
       ${geoPermissionCard()}`;
     bindGeoPermission();
+    buildMap();
+  }
+
+  function mapCard(hint) {
+    return `
+      <div class="card info">
+        <div class="row">
+          <h3 class="grow">${icon("pin")} Carte</h3>
+          <button class="small" id="center-me">${icon("pin")} Centrer sur moi</button>
+        </div>
+        <div id="map" class="map"></div>
+        <p class="small muted" id="live-info">Recherche de ta position en direct…</p>
+        <p class="small muted" id="map-info">${esc(hint || "")}</p>
+      </div>`;
+  }
+
+  // Carte + point « moi en direct » (jamais envoyé au serveur).
+  function buildMap() {
+    destroyMap();
+    mapObj = WG.createMap($("map"));
+    liveDot = WG.attachLiveDot(mapObj, $("live-info"));
+    $("center-me").onclick = () => {
+      if (!liveDot || !liveDot.center()) toast("Position en direct pas encore trouvée.", "blue");
+    };
+    updateMap();
+  }
+
+  function destroyMap() {
+    if (liveDot) { liveDot.stop(); liveDot = null; }
+    if (mapObj) { mapObj.map.remove(); mapObj = null; }
   }
 
   function renderRound() {
@@ -144,6 +176,7 @@
             <span class="timer" data-until="${esc(state.game.end_at)}" data-refresh-at-zero="1">--:--</span></div>
           <div id="immunity"></div>
         </div>
+        <div id="hunters-count" class="hunters"></div>
       </div>
       <div id="spotted-box"></div>
       <div id="push-box"></div>
@@ -158,11 +191,7 @@
       <div class="card" id="action-box"></div>` : `
       <div class="card center"><p>Aucune cible pour le moment. Patiente un instant…</p></div>`}
       <div class="card" id="ping-box"></div>
-      <div class="card info">
-        <h3>${icon("pin")} Carte</h3>
-        <div id="map" class="map"></div>
-        <p class="small muted" id="map-info"></p>
-      </div>
+      ${mapCard()}
       <div class="card">
         <div class="scores">
           <div><div class="v" id="sc-round">0</div><div class="k">${icon("star")} Manche</div></div>
@@ -184,9 +213,7 @@
     }
     $("show-code").onclick = toggleCode;
 
-    if (mapObj) { mapObj.map.remove(); mapObj = null; }
-    mapObj = WG.createMap($("map"));
-    updateMap();
+    buildMap();
   }
 
   // ---------- Carte ----------
@@ -211,12 +238,12 @@
     }
     const me = state.my_position;
     if (me) {
-      WG.label(WG.dot([me.lat, me.lng], { fillColor: "#1E3A5F", radius: 7 }).addTo(layer),
-        `Toi ${WG.ago(me.sent_at)}${me.out ? " · hors zone" : ""}`);
+      WG.label(WG.dot([me.lat, me.lng], { fillColor: "#5C5248", radius: 6 }).addTo(layer),
+        `Ton dernier ping ${WG.ago(me.sent_at)}${me.out ? " · hors zone" : ""}`);
       if (me.out) info.push("Attention : ta dernière position était hors du périmètre.");
     }
     if ((state.public_positions || []).length) info.push("Ping général : positions de tous visibles.");
-    setText("map-info", info.join(" "));
+    if (state.game.status === "manche") setText("map-info", info.join(" "));
   }
 
   // ---------- Repérage « Wanted ! » ----------
@@ -507,6 +534,16 @@
     const mc = $("mycode");
     if (mc) mc.textContent = s.me.capture_code;
 
+    const hc = $("hunters-count");
+    if (hc) {
+      const n = s.me.hunters || 0;
+      const html = n === 0
+        ? `<span class="badge plain">${icon("shield")} Aucun chasseur à tes trousses</span>`
+        : `<span class="badge ${n >= 2 ? "red" : "plain"}">${icon("run")} ${n} chasseur${n > 1 ? "s" : ""} à tes trousses</span>`
+          + (n >= 2 ? ` <span class="small muted">Tiens jusqu'au prochain ping chasseurs : +1 bonus survivant.</span>` : "");
+      if (hc.dataset.n !== String(n)) { hc.dataset.n = String(n); hc.innerHTML = html; }
+    }
+
     updateSpottedBox();
     updateActionBox();
     updateTargetState();
@@ -549,6 +586,11 @@
       }
       if (prev.spot && !next.spot && next.me.locked_until && !prev.me.locked_until) {
         toast("Repérage raté : ta cible est immunisée 2 min et ton bouton est bloqué 2 min.", "red");
+      }
+      const h0 = prev.me.hunters || 0, h1 = next.me.hunters || 0;
+      if (h1 > h0) {
+        buzz([300, 120, 300]);
+        toast(h1 - h0 === 1 ? `Un chasseur de plus à tes trousses : ${h1} au total.` : `${h1 - h0} chasseurs de plus à tes trousses : ${h1} au total.`, "red");
       }
       const a = prev.target && prev.target.pseudo, b = next.target && next.target.pseudo;
       if (a && b && a !== b) {

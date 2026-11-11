@@ -116,6 +116,8 @@ begin
   select target_id into t_id from public.assignments where hunter_id = pid[1] and closed_at is null;
   insert into _report(test, ok, detail) values ('get_my_state renvoie la cible',
     st->'target'->>'pseudo' = (select pseudo from public.players where id = t_id), st->'target'->>'pseudo');
+  insert into _report(test, ok, detail) values ('compteur : 1 chasseur après le tirage en boucle',
+    (st->'me'->>'hunters')::int = 1, st->'me'->>'hunters');
 
   -- Sans « Wanted ! », impossible de saisir un code
   perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);

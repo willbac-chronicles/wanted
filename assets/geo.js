@@ -39,19 +39,38 @@
 
   // ---------- GPS ----------
   // On « réchauffe » le GPS avant un ping pour avoir une position prête au moment d'appuyer.
+  // Le même suivi GPS sert au réchauffage avant un ping et au point « en direct » sur la carte.
+  // La position en direct reste sur le téléphone : seul « Envoyer ma position » l'envoie au serveur.
   let watchId = null;
   let lastFix = null;
+  let warm = false;
+  const liveListeners = new Set();
 
-  function startWarmup() {
-    if (watchId !== null || !navigator.geolocation) return;
-    watchId = navigator.geolocation.watchPosition(
-      p => { lastFix = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, at: Date.now() }; },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
-    );
+  function syncWatch() {
+    const want = warm || liveListeners.size > 0;
+    if (want && watchId === null && navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        p => {
+          lastFix = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, at: Date.now() };
+          liveListeners.forEach(fn => { try { fn(lastFix, null); } catch (e) { /* ignoré */ } });
+        },
+        err => liveListeners.forEach(fn => { try { fn(null, err); } catch (e) { /* ignoré */ } }),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+      );
+    } else if (!want && watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
   }
-  function stopWarmup() {
-    if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  function startWarmup() { warm = true; syncWatch(); }
+  function stopWarmup() { warm = false; syncWatch(); }
+
+  // Abonne `fn(fix, err)` au suivi en direct ; renvoie la fonction pour s'en désabonner.
+  function watchLive(fn) {
+    liveListeners.add(fn);
+    syncWatch();
+    if (lastFix && Date.now() - lastFix.at < 60000) fn(lastFix, null);
+    return () => { liveListeners.delete(fn); syncWatch(); };
   }
 
   function getFix() {
@@ -101,5 +120,34 @@
     return iso ? `à ${fmtTime(iso)}` : "";
   }
 
-  window.WG = { loadPerimeter, createMap, dot, label, startWarmup, stopWarmup, getFix, beep, ago, esc };
+  // Point « moi en direct » : disque bleu cerclé de blanc + cercle de précision, sur sa propre couche.
+  function attachLiveDot(mapObj, infoEl) {
+    const layer = L.layerGroup().addTo(mapObj.map);
+    let dotM = null, circle = null;
+    const stop = watchLive((f, err) => {
+      if (!mapObj.map._container) return;
+      if (err) {
+        if (infoEl) infoEl.textContent = err.code === 1
+          ? "Position en direct indisponible : autorise la localisation pour ce site."
+          : "Recherche de ta position en direct…";
+        return;
+      }
+      const ll = [f.lat, f.lng];
+      if (!dotM) {
+        circle = L.circle(ll, { radius: f.accuracy, color: "#1E3A5F", weight: 1, fillColor: "#1E3A5F", fillOpacity: 0.12, interactive: false }).addTo(layer);
+        dotM = label(L.circleMarker(ll, { radius: 9, weight: 3, color: "#fff", fillColor: "#1E3A5F", fillOpacity: 1 }).addTo(layer), "Moi (en direct)", true);
+      } else {
+        dotM.setLatLng(ll);
+        circle.setLatLng(ll).setRadius(f.accuracy);
+      }
+      dotM.bringToFront();
+      if (infoEl) infoEl.textContent = `Toi en direct (précision ${Math.round(f.accuracy)} m) : visible seulement par toi.`;
+    });
+    return {
+      stop() { stop(); layer.remove(); },
+      center() { if (dotM) mapObj.map.setView(dotM.getLatLng(), Math.max(mapObj.map.getZoom(), 16)); return !!dotM; }
+    };
+  }
+
+  window.WG = { loadPerimeter, createMap, dot, label, startWarmup, stopWarmup, watchLive, attachLiveDot, getFix, beep, ago, esc };
 })();

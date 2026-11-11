@@ -676,7 +676,12 @@ begin
       'captures_round', (select count(*) from public.captures
                           where hunter_id = p.id and round = g.round and not cancelled),
       'locked_until', public._lock_info(p.id),
-      'push_devices', (select count(*) from public.push_subscriptions s where s.player_id = p.id)
+      'push_devices', (select count(*) from public.push_subscriptions s where s.player_id = p.id),
+      -- Nombre de chasseurs à ses trousses (sans leur nom).
+      'hunters', case when g.status = 'manche' then
+                   (select count(*) from public.assignments a
+                     where a.target_id = p.id and a.closed_at is null and a.round = g.round)
+                 else 0 end
     );
 
     if g.status = 'manche' and now() < g.end_at then
