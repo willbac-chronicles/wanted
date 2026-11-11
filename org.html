@@ -10,7 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Stardos+Stencil:wght@400;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.2" />
 </head>
 <body>
   <div class="wrap wide">
@@ -45,7 +46,19 @@
           <button data-act="finish">Fin du jeu</button>
           <button data-act="welcome">Retour accueil</button>
           <button class="danger" data-act="reset">Réinitialiser</button>
+          <button class="danger" data-act="purge">Purger les données</button>
         </div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <h2 class="grow">Carte</h2>
+          <button class="primary" data-act="pingall">Demander la position à tous</button>
+        </div>
+        <div id="org-map" class="map tall"></div>
+        <p class="small muted">Rouge : hors périmètre. Gris : position de plus de 20 min.</p>
+        <h3>Pings de la manche</h3>
+        <div class="log" id="pings"></div>
       </section>
 
       <section class="card">
@@ -60,7 +73,7 @@
           <table>
             <thead><tr>
               <th>Photo</th><th>Pseudo</th><th>Accès</th><th>Code</th><th>Score</th><th>Manche</th>
-              <th>Cible</th><th>Chass.</th><th>État</th><th>Actions</th>
+              <th>Cible</th><th>Chass.</th><th>Position</th><th>État</th><th>Actions</th>
             </tr></thead>
             <tbody id="players"></tbody>
           </table>
@@ -91,8 +104,10 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="config.js?v=0.1"></script>
-  <script src="assets/common.js?v=0.1"></script>
-  <script src="assets/org.js?v=0.1"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="config.js?v=0.2"></script>
+  <script src="assets/common.js?v=0.2"></script>
+  <script src="assets/geo.js?v=0.2"></script>
+  <script src="assets/org.js?v=0.2"></script>
 </body>
 </html>

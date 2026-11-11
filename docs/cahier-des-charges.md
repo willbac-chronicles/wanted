@@ -18,7 +18,7 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 
 | Limite | Choix |
 |---|---|
-| Le navigateur ne peut pas envoyer la position si le téléphone est verrouillé ou la page fermée | Le joueur appuie sur **« Envoyer ma position »** dans une fenêtre de **3 min** après l'heure du ping. [C] |
+| Le navigateur ne peut pas envoyer la position si le téléphone est verrouillé ou la page fermée | Le joueur appuie sur **« Envoyer ma position »** dans une fenêtre de **1 min** après l'heure du ping (+10 s de marge réseau côté serveur). Le GPS est « réchauffé » 45 s avant chaque ping. [C] |
 | Notifications web peu fiables sur iPhone | Bandeau, son et vibration quand la page est ouverte, plus un groupe de messagerie de secours. Pas de notifications web en v1. [P] |
 | La clé publique Supabase est visible dans le code | Aucun accès direct aux tables : tout passe par des fonctions SQL (§ 6). [C] |
 | Horloges des téléphones décalées | Toutes les heures viennent du serveur ; `get_my_state` renvoie `server_now` et le front calcule les minuteurs à partir de là. [C] |
@@ -53,7 +53,7 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 
 **Contrôles en direct**
 - Révéler la position d'un joueur (à ses chasseurs ou à tous).
-- Demander la position à un joueur ou à tous (ping manuel, même fenêtre de 3 min).
+- Demander la position à un joueur ou à tous (ping manuel, même fenêtre de 1 min).
 - Message à tous ou à un joueur.
 - Corrections : ajuster les points avec un motif (sert aussi à annuler un −3 dû à une panne), annuler une capture, réattribuer une cible.
 - Vue d'ensemble : tableau des joueurs (score, cible, nombre de chasseurs, immunité, dernière position, hors périmètre) et carte des positions connues.

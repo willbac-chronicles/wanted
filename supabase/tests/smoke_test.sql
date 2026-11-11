@@ -41,6 +41,8 @@ begin
     pid := pid || (r->>'id')::uuid;
   end loop;
   insert into _report(test, ok, detail) values ('3 joueurs créés', array_length(pid,1) = 3, null);
+  -- Joueurs « inscrits » depuis 1 h, pour pouvoir simuler des pings passés.
+  update public.players set created_at = now() - interval '1 hour' where id = any(pid);
 
   -- Chaque joueur se connecte avec son code d'accès
   for i in 1..3 loop
@@ -155,12 +157,82 @@ begin
   insert into _report(test, ok) values ('annulation de capture rend les points',
     (select sum(points) from public.score_events where player_id = t_id) = -2);
 
+  -- ===== Pings et positions =====
+  insert into _report(test, ok, detail) values ('4 pings programmés au START (+15, +30, +40, +45)',
+    (select count(*) from public.pings where round = 1 and kind in ('chasseur','general')) = 4,
+    (select string_agg(kind || ' +' || extract(epoch from scheduled_at - (select start_at from public.games))::int / 60, ', ' order by scheduled_at)
+       from public.pings where round = 1));
+
+  insert into _report(test, ok, detail) values ('périmètre chargé', (select perimeter is not null from public.games where id = 1), null);
+  insert into _report(test, ok, detail) values ('point au centre : dans le périmètre',
+    (select inside from public._perimeter_check(46.5815, 0.3412)), null);
+  insert into _report(test, ok, detail) values ('point éloigné : hors périmètre',
+    (select not inside and dist_m > 500 from public._perimeter_check(46.5700, 0.3300)),
+    (select round(dist_m) || ' m' from public._perimeter_check(46.5700, 0.3300)));
+
+  -- Hors fenêtre : refusé
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  r := public.send_position(46.5815, 0.3412, 10);
+  insert into _report(test, ok, detail) values ('envoi hors fenêtre refusé', r->>'reason' = 'no_window', r::text);
+
+  -- Ping manuel à tous
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_request_position(null);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('le joueur voit le ping ouvert',
+    exists (select 1 from json_array_elements(st->'pings') e where e->>'kind' = 'manuel' and not (e->>'sent')::boolean), null);
+  r := public.send_position(46.5815, 0.3412, 10);
+  insert into _report(test, ok, detail) values ('position dans la zone acceptée', (r->>'ok')::boolean and not (r->>'out_of_perimeter')::boolean, r::text);
+  r := public.send_position(46.5815, 0.3412, 10);
+  insert into _report(test, ok, detail) values ('second envoi sans doublon', (r->>'already')::boolean, r::text);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  r := public.send_position(46.5700, 0.3300, 20);
+  insert into _report(test, ok, detail) values ('position hors zone signalée', (r->>'out_of_perimeter')::boolean, r::text);
+
+  -- Visibilité : un ping manuel n'est pas montré aux chasseurs, sauf révélation
+  insert into _report(test, ok) values ('ping manuel invisible des chasseurs', public._hunter_view(pid[1], 1) is null);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_reveal_position(pid[1], 'chasseurs');
+  insert into _report(test, ok) values ('révélation aux chasseurs', public._hunter_view(pid[1], 1) is not null);
+  st := public.org_get_overview();
+  insert into _report(test, ok, detail) values ('vue org : positions et hors zone',
+    exists (select 1 from json_array_elements(st->'players') e where (e->'last_position'->>'out')::boolean),
+    (select json_agg(e->'sent') from json_array_elements(st->'pings') e)::text);
+
+  -- Préparation du calcul de fin de manche :
+  -- le ping manuel est terminé ; le ping +15 est avancé dans le passé avec un joueur à 2 chasseurs.
+  update public.pings set scheduled_at = now() - interval '3 minutes', window_end = now() - interval '2 minutes'
+   where kind = 'manuel';
+  update public.pings set scheduled_at = now() - interval '10 minutes', window_end = now() - interval '9 minutes'
+   where id = (select min(id) from public.pings where kind = 'chasseur');
+  update public.assignments set closed_at = now(), close_reason = 'correction' where closed_at is null;
+  insert into public.assignments(round, hunter_id, target_id, assigned_at) values
+    (1, pid[1], pid[3], now() - interval '30 minutes'),
+    (1, pid[2], pid[3], now() - interval '30 minutes'),
+    (1, pid[3], pid[1], now() - interval '30 minutes');
+
   -- Fin de manche
   perform public.org_end_round();
+  insert into _report(test, ok, detail) values ('−3 par ping manqué (1 manuel + 3 sur le ping passé)',
+    (select count(*) from public.score_events where reason = 'ping manqué' and points = -3) = 4,
+    (select string_agg(p.pseudo, ', ') from public.score_events s join public.players p on p.id = s.player_id where s.reason = 'ping manqué'));
+  insert into _report(test, ok, detail) values ('bonus survivant au joueur à 2 chasseurs',
+    (select count(*) from public.score_events where reason = 'bonus survivant') = 1
+    and exists (select 1 from public.score_events where reason = 'bonus survivant' and player_id = pid[3]),
+    null);
+  insert into _report(test, ok) values ('pings futurs non pénalisés',
+    not exists (select 1 from public.score_events s join public.pings pg on pg.id::text = s.ref
+                 where s.reason = 'ping manqué' and pg.window_end > now()));
   insert into _report(test, ok, detail) values ('fin de manche → regroupement',
     (select status from public.games where id = 1) = 'regroupement'
     and not exists (select 1 from public.assignments where closed_at is null),
     (select status from public.games where id = 1));
+
+  -- Purge
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_purge();
+  insert into _report(test, ok) values ('purge : plus aucune position', not exists (select 1 from public.positions));
 
   -- Nettoyage
   perform public.org_reset();

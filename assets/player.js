@@ -1,6 +1,7 @@
 // Écran joueur.
 (function () {
   const { rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, STATUS_LABELS, CFG } = window.W;
+  const W = window.W, WG = window.WG;
 
   const app = document.getElementById("app");
   const who = document.getElementById("who");
@@ -14,6 +15,10 @@
   let busy = false;
   let lastMsgId = null;
   let codeHideTimer = null;
+  let mapObj = null;
+  let sending = false;
+  const notifiedPings = new Set();
+  const KIND_LABELS = { chasseur: "Ping chasseurs", general: "Ping général", manuel: "Ping demandé par l'organisation" };
 
   // ---------- Rendu ----------
 
@@ -28,6 +33,7 @@
     const key = [g.status, g.round, s.target ? s.target.pseudo + "|" + s.target.photo_path : "-"].join("#");
     if (key !== screenKey) {
       screenKey = key;
+      if (mapObj) { mapObj.map.remove(); mapObj = null; }
       if (g.status === "accueil") renderWaiting();
       else if (g.status === "dispersion") renderDispersion();
       else if (g.status === "manche") renderRound();
@@ -81,9 +87,34 @@
           <li>Chaque joueur est à la fois <b>chasseur</b> et <b>cible</b>.</li>
           <li>Trouve ta cible et saisis le code à 4 chiffres de son téléphone : <b>+3</b> pour toi, <b>−2</b> pour elle.</li>
           <li>Si on te trouve, tu montres ton code. Tu reçois un nouveau code et <b>2 min d'immunité</b>.</li>
+          <li>Aux pings, tu as <b>1 minute</b> pour appuyer sur « Envoyer ma position ». Ping manqué : <b>−3</b>.</li>
           <li>Garde cette page ouverte et le son activé pendant la partie.</li>
         </ul>
+      </div>
+      ${geoPermissionCard()}`;
+    bindGeoPermission();
+  }
+
+  function geoPermissionCard() {
+    return `
+      <div class="card center">
+        <h3>Localisation</h3>
+        <p class="small">Autorise dès maintenant l'accès à ta position, pour ne pas perdre de temps au premier ping.</p>
+        <button id="geo-allow">Autoriser la localisation</button>
+        <p class="small muted" id="geo-status"></p>
       </div>`;
+  }
+  function bindGeoPermission() {
+    const b = document.getElementById("geo-allow");
+    if (!b) return;
+    b.onclick = async () => {
+      const s = document.getElementById("geo-status");
+      s.textContent = "Recherche de ta position…";
+      try {
+        const f = await WG.getFix();
+        s.textContent = `Localisation OK (précision ${Math.round(f.accuracy)} m).`;
+      } catch (e) { s.textContent = e.message; }
+    };
   }
 
   function renderDispersion() {
@@ -93,7 +124,9 @@
         <p class="muted">Éloigne-toi. Ta cible sera révélée au START.</p>
         <div class="countdown" data-until="${esc(state.game.start_at)}" data-refresh-at-zero="1">--:--</div>
         <p class="small muted">START à ${esc(fmtTime(state.game.start_at))}</p>
-      </div>`;
+      </div>
+      ${geoPermissionCard()}`;
+    bindGeoPermission();
   }
 
   function renderRound() {
@@ -115,6 +148,11 @@
       <button class="primary big" id="wanted-btn">Wanted !</button>
       <p class="small center muted" id="lock-info"></p>` : `
       <div class="card center"><p>Aucune cible pour le moment. Patiente un instant…</p></div>`}
+      <div class="card" id="ping-box"></div>
+      <div class="card">
+        <div id="map" class="map"></div>
+        <p class="small muted" id="map-info"></p>
+      </div>
       <div class="card">
         <div class="scores">
           <div><div class="v" id="sc-round">0</div><div class="k">Manche</div></div>
@@ -137,6 +175,119 @@
     const wb = document.getElementById("wanted-btn");
     if (wb) wb.onclick = openCapture;
     document.getElementById("show-code").onclick = toggleCode;
+
+    if (mapObj) { mapObj.map.remove(); mapObj = null; }
+    mapObj = WG.createMap(document.getElementById("map"));
+    updateMap();
+  }
+
+  function updateMap() {
+    if (!mapObj || !state) return;
+    const { layer } = mapObj;
+    layer.clearLayers();
+    const info = [];
+    (state.public_positions || []).forEach(p => {
+      if (state.me && p.pseudo === state.me.pseudo) return;
+      WG.label(WG.dot([p.lat, p.lng], { fillColor: "#7a6a58", radius: 7 }).addTo(layer),
+        `${esc(p.pseudo)} ${WG.ago(p.sent_at)}`);
+    });
+    const t = state.target;
+    if (t && t.position) {
+      WG.label(WG.dot([t.position.lat, t.position.lng], { fillColor: "#6e1423", radius: 10 }).addTo(layer),
+        `<b>${esc(t.pseudo)}</b> ${WG.ago(t.position.sent_at)}`, true);
+      info.push(`Dernière position de ta cible : ${fmtTime(t.position.sent_at)}.`);
+    } else if (t) {
+      info.push("Position de ta cible inconnue pour l'instant : elle apparaîtra au prochain ping.");
+    }
+    const me = state.my_position;
+    if (me) {
+      WG.label(WG.dot([me.lat, me.lng], { fillColor: "#1f5fa8", radius: 7 }).addTo(layer), `Toi ${WG.ago(me.sent_at)}`);
+      if (me.out) info.push("⚠ Ta dernière position était hors du périmètre.");
+    }
+    if ((state.public_positions || []).length) info.push("Ping général : positions de tous visibles.");
+    const el = document.getElementById("map-info");
+    if (el) el.textContent = info.join(" ");
+  }
+
+  // Fenêtre de ping ouverte (non envoyée) et prochain ping.
+  function pingStatus() {
+    const list = (state && state.pings) || [];
+    const t = W.now();
+    const open = list.find(p => t >= new Date(p.scheduled_at).getTime() && t <= new Date(p.window_end).getTime() && !p.sent);
+    const sentNow = list.find(p => t >= new Date(p.scheduled_at).getTime() && t <= new Date(p.window_end).getTime() && p.sent);
+    const next = list.find(p => new Date(p.scheduled_at).getTime() > t);
+    return { open, sentNow, next };
+  }
+
+  function updatePingBox() {
+    const box = document.getElementById("ping-box");
+    if (!box) return;
+    const { open, sentNow, next } = pingStatus();
+
+    // Réchauffe le GPS 45 s avant un ping, et pendant la fenêtre.
+    const soon = next && msUntil(next.scheduled_at) < 45000;
+    if (open || soon) WG.startWarmup(); else WG.stopWarmup();
+
+    if (open) {
+      if (!notifiedPings.has(open.id)) {
+        notifiedPings.add(open.id);
+        buzz([400, 150, 400, 150, 400]);
+        WG.beep(3);
+        toast(`${KIND_LABELS[open.kind]} : envoie ta position !`, "red");
+      }
+      const key = "open" + open.id;
+      if (box.dataset.key !== key) {
+        box.dataset.key = key;
+        box.className = "card ping-open";
+        box.innerHTML = `
+          <h2>${esc(KIND_LABELS[open.kind])}</h2>
+          <button class="primary big" id="send-pos">Envoyer ma position</button>
+          <p class="center"><span class="timer" id="ping-left"></span> <span class="small muted">pour l'envoyer</span></p>`;
+        document.getElementById("send-pos").onclick = () => sendPosition();
+      }
+      const left = document.getElementById("ping-left");
+      if (left) left.textContent = fmtDuration(msUntil(open.window_end));
+      return;
+    }
+
+    let key, html;
+    if (sentNow) {
+      key = "sent" + sentNow.id;
+      html = `<p class="center"><span class="badge ok">Position envoyée</span></p>`;
+    } else if (next) {
+      key = "next" + next.id;
+      html = `<div class="row"><div class="grow"><span class="muted small">${esc(KIND_LABELS[next.kind])} dans</span><br>
+              <span class="timer" id="ping-next"></span></div><span class="small muted">à ${esc(fmtTime(next.scheduled_at))}</span></div>`;
+    } else {
+      key = "none";
+      html = `<p class="small muted center">Plus de ping prévu dans cette manche.</p>`;
+    }
+    if (box.dataset.key !== key) { box.dataset.key = key; box.className = "card"; box.innerHTML = html; }
+    const n = document.getElementById("ping-next");
+    if (n && next) n.textContent = fmtDuration(msUntil(next.scheduled_at));
+  }
+
+  async function sendPosition() {
+    if (sending) return;
+    sending = true;
+    const btn = document.getElementById("send-pos");
+    if (btn) { btn.disabled = true; btn.textContent = "Localisation…"; }
+    try {
+      const f = await WG.getFix();
+      const r = await rpc("send_position", { p_lat: f.lat, p_lng: f.lng, p_accuracy: f.accuracy });
+      if (r.ok) {
+        toast(r.out_of_perimeter ? `Position envoyée, mais tu es hors du périmètre (≈ ${r.distance_m} m) !` : "Position envoyée.",
+              r.out_of_perimeter ? "red" : "ok");
+      } else {
+        toast(r.reason === "no_window" ? "Trop tard : la fenêtre de ping est fermée." : "Envoi refusé.", "red");
+      }
+      await refresh();
+    } catch (e) {
+      toast(e.message, "red");
+      if (btn) { btn.disabled = false; btn.textContent = "Réessayer"; }
+    } finally {
+      sending = false;
+    }
   }
 
   async function renderBoard() {
@@ -190,6 +341,8 @@
 
     const mc = document.getElementById("mycode");
     if (mc) mc.textContent = s.me.capture_code;
+
+    updatePingBox();
 
     let needRefresh = false;
     document.querySelectorAll("[data-until]").forEach(el => {
@@ -300,6 +453,8 @@
       lastMsgId = newest ? newest.id : (lastMsgId === null ? 0 : lastMsgId);
       state = next;
       render();
+      updateMap();
+      if (next.game.status !== "manche") WG.stopWarmup();
       if (["regroupement", "termine"].includes(next.game.status) && next.me) loadBoard();
     } catch (e) {
       if (!state) app.innerHTML = `<div class="card center"><p>Connexion impossible.</p><p class="small muted">${esc(e.message)}</p><button id="retry">Réessayer</button></div>`;
@@ -308,7 +463,11 @@
     }
   }
 
-  setInterval(refresh, CFG.POLL_INTERVAL_MS || 10000);
+  // Rafraîchissement : toutes les 5 s pendant une manche (pings manuels), 10 s sinon.
+  (function loop() {
+    const ms = state && state.game && state.game.status === "manche" ? 5000 : (CFG.POLL_INTERVAL_MS || 10000);
+    setTimeout(() => { refresh().finally(loop); }, ms);
+  })();
   setInterval(updateLive, 1000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
   refresh();

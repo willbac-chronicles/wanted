@@ -1,6 +1,7 @@
 // Écran organisateur.
 (function () {
   const { sb, rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, photoUrl, resizeImage, randomName, STATUS_LABELS } = window.W;
+  const W = window.W, WG = window.WG;
   const $ = id => document.getElementById(id);
 
   let data = null;
@@ -20,7 +21,12 @@
     connexion: d => `${d.joueur} s'est connecté`,
     connexion_organisateur: () => "Connexion organisateur",
     statut: d => `Statut : ${STATUS_LABELS[d.statut] || d.statut}`,
-    reinitialisation: () => "Partie réinitialisée"
+    reinitialisation: () => "Partie réinitialisée",
+    hors_perimetre: d => `⚠ ${d.joueur} hors du périmètre (≈ ${d.distance_m} m)`,
+    ping_manuel: d => `Position demandée : ${d.joueur}`,
+    revelation: d => `Position de ${d.joueur} révélée (${d.portee})`,
+    score_manche: d => `Pénalités de ping et bonus survivant calculés (manche ${d.manche})`,
+    purge: () => "Photos et positions purgées"
   };
 
   // ---------- Connexion ----------
@@ -60,16 +66,23 @@
         <td>${esc(p.score_round)}</td>
         <td>${esc(p.target || "—")}</td>
         <td>${esc(p.hunters)}</td>
+        <td class="small">${p.last_position ? `${esc(fmtTime(p.last_position.sent_at))}${p.last_position.out ? ` <span class="badge red">hors zone ${Math.round(p.last_position.distance_out_m || 0)} m</span>` : ""}` : "—"}${p.out_count > 1 ? ` <span class="small muted">(${p.out_count}× hors zone)</span>` : ""}</td>
         <td>${msUntil(p.immune_until) > 0 ? '<span class="badge ok">immunisé</span>' : ""}${p.active ? "" : '<span class="badge warn">inactif</span>'}</td>
         <td class="row" style="gap:4px;flex-wrap:nowrap">
           <button class="small" data-a="photo">Photo</button>
+          <button class="small" data-a="ping">Ping</button>
+          <button class="small" data-a="reveal-h">Révéler ch.</button>
+          <button class="small" data-a="reveal-all">Révéler tous</button>
           <button class="small" data-a="points">± pts</button>
           <button class="small" data-a="reassign">Réattr.</button>
           <button class="small" data-a="code">Nv accès</button>
           <button class="small" data-a="toggle">${p.active ? "Désact." : "Activer"}</button>
           <button class="small danger" data-a="delete">Suppr.</button>
         </td>
-      </tr>`).join("") || `<tr><td colspan="10" class="muted">Aucun joueur.</td></tr>`;
+      </tr>`).join("") || `<tr><td colspan="11" class="muted">Aucun joueur.</td></tr>`;
+
+    renderPings();
+    renderMap();
 
     document.querySelectorAll("img[data-photo]").forEach(async img => {
       const url = await photoUrl(img.dataset.photo);
@@ -94,6 +107,32 @@
     }).join("") || `<div class="muted">Rien pour l'instant.</div>`;
 
     tick();
+  }
+
+  const PING_LABELS = { chasseur: "Chasseurs", general: "Général", manuel: "Manuel" };
+
+  function renderPings() {
+    const t = W.now();
+    $("pings").innerHTML = (data.pings || []).map(p => {
+      const start = new Date(p.scheduled_at).getTime(), end = new Date(p.window_end).getTime();
+      const st = t < start ? "à venir" : t <= end ? "<b>en cours</b>" : "terminé";
+      return `<div>${esc(fmtTime(p.scheduled_at))} · ${esc(PING_LABELS[p.kind])}${p.for_player ? " (" + esc(p.for_player) + ")" : ""} · ${st} · ${esc(p.sent)}/${esc(p.expected)} envoyé(s)</div>`;
+    }).join("") || `<div class="muted">Les pings sont créés au START.</div>`;
+  }
+
+  let mapObj = null;
+  function renderMap() {
+    if (!mapObj) mapObj = WG.createMap($("org-map"));
+    const { layer } = mapObj;
+    layer.clearLayers();
+    data.players.forEach(p => {
+      const lp = p.last_position;
+      if (!lp) return;
+      const old = W.now() - new Date(lp.sent_at).getTime() > 20 * 60 * 1000;
+      const color = lp.out ? "#c0392b" : old ? "#9a8f80" : "#6e1423";
+      WG.label(WG.dot([lp.lat, lp.lng], { fillColor: color }).addTo(layer),
+        `<b>${esc(p.pseudo)}</b> ${esc(fmtTime(lp.sent_at))}${lp.accuracy ? ` ±${Math.round(lp.accuracy)} m` : ""}`, true);
+    });
   }
 
   function tick() {
@@ -126,7 +165,9 @@
       if (a === "regroup") act("org_set_status", { p_status: "regroupement" });
       if (a === "finish") act("org_set_status", { p_status: "termine" }, "Afficher le classement final aux joueurs ?");
       if (a === "welcome") act("org_set_status", { p_status: "accueil" });
-      if (a === "reset") act("org_reset", {}, "Tout réinitialiser ? Captures, scores, cibles, messages et journal seront effacés. Les joueurs et les photos sont conservés.");
+      if (a === "reset") act("org_reset", {}, "Tout réinitialiser ? Captures, scores, cibles, pings, positions, messages et journal seront effacés. Les joueurs et les photos sont conservés.");
+      if (a === "pingall") act("org_request_position", { p_player: null }, "Demander leur position à tous les joueurs ? Ils auront 1 minute (−3 s'ils ne l'envoient pas).");
+      if (a === "purge") purge();
     };
   });
 
@@ -158,6 +199,9 @@
       if (!reason) return;
       act("org_adjust_points", { p_player: id, p_points: pts, p_reason: reason });
     }
+    if (a === "ping") act("org_request_position", { p_player: id }, `Demander sa position à ${p.pseudo} ? 1 minute pour l'envoyer.`);
+    if (a === "reveal-h") act("org_reveal_position", { p_player: id, p_scope: "chasseurs" }, `Révéler la dernière position de ${p.pseudo} à ses chasseurs ?`);
+    if (a === "reveal-all") act("org_reveal_position", { p_player: id, p_scope: "tous" }, `Révéler la dernière position de ${p.pseudo} à tous les joueurs ?`);
     if (a === "reassign") act("org_reassign", { p_hunter: id, p_target: null }, `Donner une nouvelle cible au hasard à ${p.pseudo} ?`);
     if (a === "code") {
       if (!confirm(`Générer un nouveau code d'accès pour ${p.pseudo} ? Son téléphone sera déconnecté.`)) return;
@@ -191,6 +235,23 @@
       await refresh();
     } catch (e) { toast(e.message, "red"); }
   };
+
+  async function purge() {
+    if (!confirm("Purger les données ? Toutes les photos et toutes les positions seront supprimées définitivement. Les scores sont conservés.")) return;
+    if (!confirm("Confirmer la suppression définitive des photos et des positions ?")) return;
+    try {
+      const paths = await rpc("org_purge");
+      // Supprime aussi les fichiers orphelins éventuels du bucket.
+      const listed = await sb.storage.from("photos").list("", { limit: 1000 });
+      const all = new Set([...(paths || []), ...((listed.data || []).map(o => o.name))]);
+      if (all.size) {
+        const rm = await sb.storage.from("photos").remove([...all]);
+        if (rm.error) throw rm.error;
+      }
+      toast(`Purge terminée : ${all.size} photo(s) et toutes les positions supprimées.`, "ok");
+      await refresh();
+    } catch (e) { toast(e.message, "red"); }
+  }
 
   // ---------- Messages, captures, export ----------
 
