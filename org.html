@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#6e1423" />
+  <meta name="robots" content="noindex" />
+  <title>Wanted · Organisation</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Stardos+Stencil:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.1" />
+</head>
+<body>
+  <div class="wrap wide">
+    <header class="top">
+      <div class="brand">WANTED</div>
+      <div class="who">Organisation</div>
+    </header>
+
+    <section id="login" class="card hidden" style="max-width:420px;margin:0 auto">
+      <h2>Accès organisateur</h2>
+      <input class="code" id="org-code" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      <p></p>
+      <button class="primary big" id="org-login">Entrer</button>
+    </section>
+
+    <div id="dash" class="hidden">
+      <section class="card">
+        <div class="row">
+          <div class="grow">
+            <h2 id="g-status">—</h2>
+            <div class="muted" id="g-detail"></div>
+          </div>
+          <div class="timer" id="g-timer"></div>
+        </div>
+        <p></p>
+        <div class="row">
+          <button class="primary" data-act="disp1">Dispersion manche 1</button>
+          <button class="primary" data-act="disp2">Dispersion manche 2</button>
+          <button data-act="draw">Tirer maintenant</button>
+          <button data-act="end">Fin de manche</button>
+          <button data-act="regroup">Regroupement</button>
+          <button data-act="finish">Fin du jeu</button>
+          <button data-act="welcome">Retour accueil</button>
+          <button class="danger" data-act="reset">Réinitialiser</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Joueurs <span class="muted small" id="p-count"></span></h2>
+        <div class="row">
+          <input class="grow" id="new-pseudo" placeholder="Pseudo du nouveau joueur" maxlength="30" style="flex:1 1 200px;width:auto" />
+          <button class="primary" id="add-player">Ajouter</button>
+          <button id="export-csv">Exporter le classement</button>
+        </div>
+        <p></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Photo</th><th>Pseudo</th><th>Accès</th><th>Code</th><th>Score</th><th>Manche</th>
+              <th>Cible</th><th>Chass.</th><th>État</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="players"></tbody>
+          </table>
+        </div>
+        <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden" />
+      </section>
+
+      <section class="card">
+        <h2>Message</h2>
+        <div class="row">
+          <select id="msg-to" style="flex:0 1 220px;width:auto"><option value="">Tout le monde</option></select>
+          <input id="msg-body" maxlength="500" placeholder="Texte du message" style="flex:1 1 240px;width:auto" />
+          <button class="primary" id="msg-send">Envoyer</button>
+        </div>
+      </section>
+
+      <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <section class="card">
+          <h2>Captures</h2>
+          <div class="log" id="captures"></div>
+        </section>
+        <section class="card">
+          <h2>Journal</h2>
+          <div class="log" id="log"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="config.js?v=0.1"></script>
+  <script src="assets/common.js?v=0.1"></script>
+  <script src="assets/org.js?v=0.1"></script>
+</body>
+</html>
