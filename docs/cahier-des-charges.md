@@ -11,7 +11,11 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 - Stack : GitHub Pages (front statique HTML/JS) + Supabase. [C]
 - Carte : Leaflet 1.9.4 + fond OpenStreetMap/CARTO, comme l'ancien dépôt. Périmètre importé d'un KMZ Google Earth via `kmz_to_geojson.py` (repris de l'ancien dépôt). [C]
 - Briques à reprendre de l'ancien dépôt : accès par code et pseudo, connexion anonyme, carte avec périmètre, minuteur du prochain ping, Start et réinitialisation, protection contre les doubles envois. [P]
-- Interface pensée d'abord pour le téléphone, style « carnet d'aventurier » : Cinzel, Cormorant Garamond, Stardos Stencil, parchemin et bordeaux. [C]
+- Interface pensée d'abord pour le téléphone. Direction artistique : **western de Noël sur papier d'avis de recherche**, fond clair uniquement. [C]
+  - Couleurs : rouge cerise #8E1F2C (action, capture, alerte), bleu nuit #1E3A5F (pings, carte, infos), vert sapin #1F4D3A (immunité, validation), or #C9A227 (points, toujours avec texte brun), parchemin #E8DDC7 (avis de recherche, bordure double brune), blanc neige #F7F5F0 (fond), brun #2D241E (texte), #5C5248 (texte secondaire).
+  - Polices : Rye (« WANTED », titres d'affiche), Cinzel (petites capitales de section), Nunito (tout le reste).
+  - Accessibilité : zones tactiles ≥ 44 px, contraste ≥ 4,5:1, jamais la couleur seule (icône ou mot en plus), icônes SVG au trait.
+  - Décor : petits lutins originaux dans les zones vides, sans animation continue.
 - Deux rôles : **joueur** et **organisateur**. [C]
 
 ## 2. Limites techniques
@@ -72,12 +76,15 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 - Manche 2 : nouveau tirage en boucle.
 - **Réattributions au hasard** parmi les joueurs, en excluant le chasseur lui-même et la cible qu'il vient de quitter. Plusieurs chasseurs peuvent avoir la même cible.
 
-**Capture** (`submit_capture`) [C]
-1. Vérifie que la manche est en cours, que le chasseur a une cible, que le code correspond au code actuel de cette cible et que la cible n'est pas immunisée.
-2. Enregistre la capture : +3 pour le chasseur, −2 pour la cible.
-3. Génère un nouveau code pour la cible et lui donne 2 min d'immunité.
-4. **Tous les chasseurs de cette cible** (celui qui l'a trouvée et les autres) reçoivent une nouvelle cible au hasard. Ce peut être un autre chasseur ou n'importe quel joueur.
-5. Anti-essais au hasard : 3 codes faux en 5 min bloquent la saisie pendant 2 min. [P]
+**Capture en deux temps** [C]
+1. **« Wanted ! »** (`spot_target`) : le chasseur pense avoir trouvé sa cible. La cible est prévenue (bandeau, vibration, bip, son code affiché) et **doit s'arrêter**. Le chasseur n'est pas nommé.
+2. **Saisie du code** (`submit_capture`) : possible seulement pendant la **minute** qui suit « Wanted ! », 3 essais.
+   - Code bon : +3 pour le chasseur, −2 pour la cible ; nouveau code et 2 min d'immunité pour la cible ; **tous les chasseurs** de cette cible reçoivent une nouvelle cible au hasard.
+   - Minute écoulée ou 3 codes faux : **repérage raté** — la cible est immunisée 2 min et le chasseur ne peut plus utiliser « Wanted ! » pendant 2 min. Aucun point.
+3. Une cible ne peut être repérée que par un chasseur à la fois. « Wanted ! » est indisponible si la cible est immunisée.
+4. Ce mécanisme remplace l'ancien blocage « 3 codes faux en 5 min ».
+
+Limite : la cible n'est prévenue que si la page est ouverte (pas de notification quand le téléphone est verrouillé). Le front interroge le serveur toutes les 3 s pendant une manche.
 
 **Pings**
 - Ping chasseur : chaque chasseur voit la position envoyée par sa cible. [C]

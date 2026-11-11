@@ -21,7 +21,7 @@
     loadPerimeter().then(geo => {
       if (!geo || !map._container) return;
       const poly = L.geoJSON(geo, {
-        style: { color: "#6e1423", weight: 3, dashArray: "8 6", fillColor: "#6e1423", fillOpacity: 0.05 }
+        style: { color: "#1E3A5F", weight: 3, dashArray: "8 6", fillColor: "#1E3A5F", fillOpacity: 0.06 }
       }).addTo(map);
       map.fitBounds(poly.getBounds(), { padding: [12, 12] });
     });

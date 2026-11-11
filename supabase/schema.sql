@@ -143,13 +143,34 @@ create table if not exists public.reveals (
   created_at timestamptz not null default now()
 );
 
+-- v1.1 : repérage « Wanted ! » — le chasseur signale sa cible, puis a 1 min pour saisir le code.
+alter table public.games add column if not exists challenge_seconds int not null default 60;
+alter table public.games add column if not exists cooldown_seconds int not null default 120;
+alter table public.players add column if not exists cooldown_until timestamptz;
+
+create table if not exists public.challenges (
+  id bigint generated always as identity primary key,
+  round int not null,
+  hunter_id uuid not null references public.players(id) on delete cascade,
+  target_id uuid not null references public.players(id) on delete cascade,
+  started_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  status text not null default 'active' check (status in ('active','reussi','echoue','annule')),
+  wrong_attempts int not null default 0,
+  resolved_at timestamptz
+);
+create unique index if not exists challenges_one_active_per_hunter
+  on public.challenges(hunter_id) where status = 'active';
+create unique index if not exists challenges_one_active_per_target
+  on public.challenges(target_id) where status = 'active';
+
 -- Aucun accès direct aux tables depuis le front : tout passe par les fonctions.
 do $$
 declare t text;
 begin
   foreach t in array array['games','players','devices','assignments','captures',
                            'score_events','code_attempts','messages','event_log',
-                           'pings','positions','reveals'] loop
+                           'pings','positions','reveals','challenges'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from public, anon, authenticated', t);
   end loop;
@@ -401,6 +422,8 @@ begin
     raise exception 'Partie non initialisée';
   end if;
 
+  perform public._expire_challenges();
+
   if (g.status = 'dispersion' and now() >= g.start_at)
      or (g.status = 'manche' and now() >= g.end_at) then
     select * into g from public.games where id = 1 for update;
@@ -423,6 +446,7 @@ begin
       end if;
       update public.assignments set closed_at = now(), close_reason = 'fin_manche'
        where closed_at is null;
+      update public.challenges set status = 'annule', resolved_at = now() where status = 'active';
       update public.games set status = 'regroupement', updated_at = now()
        where id = 1 returning * into g;
       perform public._log('fin_manche', jsonb_build_object('manche', g.round));
@@ -432,25 +456,48 @@ begin
   return g;
 end $$;
 
+-- Bouton « Wanted ! » bloqué jusqu'à cette heure (après un repérage raté).
 create or replace function public._lock_info(p_player uuid)
-returns timestamptz language plpgsql stable security definer
+returns timestamptz language sql stable security definer
+set search_path = public
+as $$ select cooldown_until from public.players where id = p_player and cooldown_until > now() $$;
+
+-- Repérage raté : la cible est immunisée 2 min, le chasseur ne peut plus repérer pendant 2 min.
+create or replace function public._fail_challenge(p_id bigint, p_at timestamptz)
+returns void language plpgsql volatile security definer
 set search_path = public
 as $$
 declare
-  v_last_ok timestamptz;
-  v_fail int;
-  v_last_fail timestamptz;
+  c public.challenges;
+  g public.games;
 begin
-  select max(created_at) into v_last_ok
-    from public.code_attempts where hunter_id = p_player and success;
-  select count(*), max(created_at) into v_fail, v_last_fail
-    from public.code_attempts
-   where hunter_id = p_player and not success
-     and created_at > greatest(now() - interval '5 minutes', coalesce(v_last_ok, '-infinity'));
-  if v_fail >= 3 and v_last_fail + interval '2 minutes' > now() then
-    return v_last_fail + interval '2 minutes';
-  end if;
-  return null;
+  select * into g from public.games where id = 1;
+  update public.challenges set status = 'echoue', resolved_at = now()
+   where id = p_id and status = 'active' returning * into c;
+  if c.id is null then return; end if;
+  update public.players
+     set immune_until = greatest(coalesce(immune_until, '-infinity'), p_at + make_interval(secs => g.immunity_seconds))
+   where id = c.target_id;
+  update public.players
+     set cooldown_until = greatest(coalesce(cooldown_until, '-infinity'), p_at + make_interval(secs => g.cooldown_seconds))
+   where id = c.hunter_id;
+  perform public._log('repere_echoue', jsonb_build_object(
+    'chasseur', (select pseudo from public.players where id = c.hunter_id),
+    'cible', (select pseudo from public.players where id = c.target_id)));
+end $$;
+
+-- Repérages dont la minute est écoulée (+5 s de marge réseau).
+create or replace function public._expire_challenges()
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+declare c record;
+begin
+  for c in select id, expires_at from public.challenges
+            where status = 'active' and expires_at + interval '5 seconds' < now()
+            for update skip locked loop
+    perform public._fail_challenge(c.id, c.expires_at);
+  end loop;
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -513,6 +560,7 @@ begin
 
     if g.status = 'manche' and now() < g.end_at then
       select json_build_object('pseudo', t.pseudo, 'photo_path', t.photo_path, 'assigned_at', a.assigned_at,
+                               'immune_until', case when t.immune_until > now() then t.immune_until end,
                                'position', public._hunter_view(t.id, g.round))
         into v_target
         from public.assignments a join public.players t on t.id = a.target_id
@@ -530,6 +578,14 @@ begin
       'immunity_seconds', g.immunity_seconds),
     'me', v_me_json,
     'target', v_target,
+    -- Mon repérage en cours (en tant que chasseur).
+    'spot', (
+      select json_build_object('expires_at', c.expires_at, 'wrong_attempts', c.wrong_attempts)
+        from public.challenges c where c.hunter_id = v_me and c.status = 'active'),
+    -- Je suis repéré : je dois m'arrêter (le chasseur n'est pas nommé).
+    'spotted', (
+      select json_build_object('id', c.id, 'expires_at', c.expires_at)
+        from public.challenges c where c.target_id = v_me and c.status = 'active'),
     -- Mes pings de la manche (le front calcule le prochain et la fenêtre ouverte).
     'pings', (
       select coalesce(json_agg(json_build_object(
@@ -570,6 +626,65 @@ begin
   );
 end $$;
 
+-- « Wanted ! » : le chasseur pense avoir trouvé sa cible. La cible est prévenue et doit s'arrêter ;
+-- le chasseur a 1 min pour la rejoindre et saisir son code.
+create or replace function public.spot_target()
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare
+  v_me uuid := public._my_player_id();
+  g public.games;
+  a public.assignments;
+  me public.players;
+  t public.players;
+  c public.challenges;
+begin
+  if v_me is null then raise exception 'Joueur non connecté'; end if;
+  g := public._tick();
+  if g.status <> 'manche' or now() < g.start_at or now() >= g.end_at then
+    return json_build_object('ok', false, 'reason', 'not_running');
+  end if;
+
+  select * into a from public.assignments
+   where hunter_id = v_me and closed_at is null and round = g.round;
+  if a.id is null then
+    return json_build_object('ok', false, 'reason', 'no_target');
+  end if;
+
+  perform 1 from public.players where id in (v_me, a.target_id) order by id for update;
+  if not exists (select 1 from public.assignments where id = a.id and closed_at is null) then
+    return json_build_object('ok', false, 'reason', 'target_changed');
+  end if;
+  select * into me from public.players where id = v_me;
+  select * into t from public.players where id = a.target_id;
+
+  select * into c from public.challenges where hunter_id = v_me and status = 'active';
+  if c.id is not null then
+    if c.target_id = t.id then
+      return json_build_object('ok', true, 'already', true, 'expires_at', c.expires_at);
+    end if;
+    update public.challenges set status = 'annule', resolved_at = now() where id = c.id;
+  end if;
+
+  if me.cooldown_until > now() then
+    return json_build_object('ok', false, 'reason', 'cooldown', 'locked_until', me.cooldown_until);
+  end if;
+  if t.immune_until > now() then
+    return json_build_object('ok', false, 'reason', 'immune', 'immune_until', t.immune_until);
+  end if;
+  if exists (select 1 from public.challenges where target_id = t.id and status = 'active') then
+    return json_build_object('ok', false, 'reason', 'already_spotted');
+  end if;
+
+  insert into public.challenges(round, hunter_id, target_id, expires_at)
+  values (g.round, v_me, t.id, now() + make_interval(secs => g.challenge_seconds))
+  returning * into c;
+
+  perform public._log('repere', jsonb_build_object('chasseur', me.pseudo, 'cible', t.pseudo));
+  return json_build_object('ok', true, 'expires_at', c.expires_at);
+end $$;
+
 create or replace function public.submit_capture(p_code text)
 returns json language plpgsql volatile security definer
 set search_path = public
@@ -579,7 +694,7 @@ declare
   g public.games;
   a public.assignments;
   t public.players;
-  v_locked timestamptz;
+  c public.challenges;
   v_fail int;
   v_capture_id bigint;
   v_hunters uuid[];
@@ -590,11 +705,6 @@ begin
   g := public._tick();
   if g.status <> 'manche' or now() < g.start_at or now() >= g.end_at then
     return json_build_object('ok', false, 'reason', 'not_running');
-  end if;
-
-  v_locked := public._lock_info(v_me);
-  if v_locked is not null then
-    return json_build_object('ok', false, 'reason', 'locked', 'locked_until', v_locked);
   end if;
 
   select * into a from public.assignments
@@ -609,21 +719,31 @@ begin
     return json_build_object('ok', false, 'reason', 'target_changed');
   end if;
 
-  select * into t from public.players where id = a.target_id;
-  if t.immune_until is not null and t.immune_until > now() then
-    return json_build_object('ok', false, 'reason', 'immune', 'immune_until', t.immune_until);
+  -- Le code ne peut être saisi que pendant la minute qui suit « Wanted ! ».
+  select * into c from public.challenges
+   where hunter_id = v_me and target_id = a.target_id and status = 'active';
+  if c.id is null then
+    return json_build_object('ok', false, 'reason', 'no_spot', 'locked_until', public._lock_info(v_me));
   end if;
+  if now() > c.expires_at + interval '5 seconds' then
+    perform public._fail_challenge(c.id, c.expires_at);
+    return json_build_object('ok', false, 'reason', 'expired', 'locked_until', public._lock_info(v_me));
+  end if;
+
+  select * into t from public.players where id = a.target_id;
 
   if regexp_replace(coalesce(p_code, ''), '\D', '', 'g') <> t.capture_code then
     insert into public.code_attempts(hunter_id, success) values (v_me, false);
-    v_locked := public._lock_info(v_me);
-    select count(*) into v_fail from public.code_attempts
-     where hunter_id = v_me and not success and created_at > now() - interval '5 minutes';
-    return json_build_object('ok', false, 'reason', 'wrong_code',
-                             'attempts_left', greatest(0, 3 - v_fail),
-                             'locked_until', v_locked);
+    update public.challenges set wrong_attempts = wrong_attempts + 1 where id = c.id
+    returning wrong_attempts into v_fail;
+    if v_fail >= 3 then
+      perform public._fail_challenge(c.id, now());
+      return json_build_object('ok', false, 'reason', 'failed', 'locked_until', public._lock_info(v_me));
+    end if;
+    return json_build_object('ok', false, 'reason', 'wrong_code', 'attempts_left', 3 - v_fail);
   end if;
 
+  update public.challenges set status = 'reussi', resolved_at = now() where id = c.id;
   insert into public.code_attempts(hunter_id, success) values (v_me, true);
   insert into public.captures(round, hunter_id, target_id)
   values (g.round, v_me, t.id) returning id into v_capture_id;
@@ -788,6 +908,9 @@ begin
                  where a.hunter_id = p.id and a.closed_at is null) as target,
                (select count(*) from public.assignments a
                  where a.target_id = p.id and a.closed_at is null) as hunters,
+               exists (select 1 from public.challenges ch
+                        where ch.target_id = p.id and ch.status = 'active') as spotted,
+               case when p.cooldown_until > now() then p.cooldown_until end as cooldown_until,
                (select json_build_object('lat', po.lat, 'lng', po.lng, 'accuracy', po.accuracy,
                                          'sent_at', po.sent_at, 'out', po.out_of_perimeter,
                                          'distance_out_m', po.distance_out_m)
@@ -895,7 +1018,8 @@ begin
     raise exception 'Impossible pendant une dispersion ou une manche';
   end if;
   update public.assignments set closed_at = now(), close_reason = 'correction' where closed_at is null;
-  update public.players set immune_until = null where true;
+  update public.players set immune_until = null, cooldown_until = null where true;
+  update public.challenges set status = 'annule', resolved_at = now() where status = 'active';
   update public.games
      set status = 'dispersion', round = p_round,
          dispersion_started_at = now(),
@@ -996,6 +1120,8 @@ begin
   if p_target = p_hunter then raise exception 'Un joueur ne peut pas se chasser lui-même'; end if;
   update public.assignments set closed_at = now(), close_reason = 'correction'
    where hunter_id = p_hunter and closed_at is null returning target_id into v_old;
+  update public.challenges set status = 'annule', resolved_at = now()
+   where hunter_id = p_hunter and status = 'active';
   insert into public.assignments(round, hunter_id, target_id)
   values (g.round, p_hunter, coalesce(p_target, public._pick_target(p_hunter, v_old)));
   perform public._log('reattribution', jsonb_build_object(
@@ -1071,6 +1197,7 @@ set search_path = public
 as $$
 begin
   perform public._require_org();
+  delete from public.challenges where true;
   delete from public.assignments where true;
   delete from public.positions where true;
   delete from public.reveals where true;
@@ -1080,7 +1207,7 @@ begin
   delete from public.code_attempts where true;
   delete from public.messages where true;
   delete from public.event_log where true;
-  update public.players set capture_code = public._new_capture_code(capture_code), immune_until = null where true;
+  update public.players set capture_code = public._new_capture_code(capture_code), immune_until = null, cooldown_until = null where true;
   update public.games
      set status = 'accueil', round = 0, drawn_round = 0, round_scored = 0,
          dispersion_started_at = null, start_at = null, end_at = null, updated_at = now()
@@ -1102,7 +1229,7 @@ begin
      where n.nspname = 'public'
        and (p.proname like '\_%' or p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture','get_leaderboard',
-                             'send_position','get_perimeter'))
+                             'send_position','get_perimeter','spot_target'))
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
@@ -1113,7 +1240,7 @@ begin
      where n.nspname = 'public'
        and (p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture',
-                             'get_leaderboard','send_position','get_perimeter','_has_device','_is_org'))
+                             'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org'))
   loop
     execute format('grant execute on function %s to authenticated', f.sig);
   end loop;

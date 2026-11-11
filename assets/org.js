@@ -1,6 +1,6 @@
 // Écran organisateur.
 (function () {
-  const { sb, rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, photoUrl, resizeImage, randomName, STATUS_LABELS } = window.W;
+  const { sb, rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, photoUrl, resizeImage, randomName, STATUS_LABELS, icon } = window.W;
   const W = window.W, WG = window.WG;
   const $ = id => document.getElementById(id);
 
@@ -22,7 +22,9 @@
     connexion_organisateur: () => "Connexion organisateur",
     statut: d => `Statut : ${STATUS_LABELS[d.statut] || d.statut}`,
     reinitialisation: () => "Partie réinitialisée",
-    hors_perimetre: d => `⚠ ${d.joueur} hors du périmètre (≈ ${d.distance_m} m)`,
+    repere: d => `${d.chasseur} a repéré ${d.cible} (1 min pour le code)`,
+    repere_echoue: d => `Repérage raté : ${d.chasseur} → ${d.cible} (immunité et blocage 2 min)`,
+    hors_perimetre: d => `Hors zone : ${d.joueur} hors du périmètre (≈ ${d.distance_m} m)`,
     ping_manuel: d => `Position demandée : ${d.joueur}`,
     revelation: d => `Position de ${d.joueur} révélée (${d.portee})`,
     score_manche: d => `Pénalités de ping et bonus survivant calculés (manche ${d.manche})`,
@@ -60,14 +62,14 @@
       <tr data-id="${esc(p.id)}" style="${p.active ? "" : "opacity:.5"}">
         <td><img class="thumb" data-photo="${esc(p.photo_path || "")}" alt="" /></td>
         <td><b>${esc(p.pseudo)}</b></td>
-        <td class="mono">${esc(p.access_code)} ${p.linked ? '<span class="badge ok">lié</span>' : ""}</td>
+        <td class="mono">${esc(p.access_code)} ${p.linked ? `<span class="badge plain">${icon("check")} lié</span>` : ""}</td>
         <td class="mono">${esc(p.capture_code)}</td>
         <td>${esc(p.score_total)}</td>
         <td>${esc(p.score_round)}</td>
         <td>${esc(p.target || "—")}</td>
         <td>${esc(p.hunters)}</td>
-        <td class="small">${p.last_position ? `${esc(fmtTime(p.last_position.sent_at))}${p.last_position.out ? ` <span class="badge red">hors zone ${Math.round(p.last_position.distance_out_m || 0)} m</span>` : ""}` : "—"}${p.out_count > 1 ? ` <span class="small muted">(${p.out_count}× hors zone)</span>` : ""}</td>
-        <td>${msUntil(p.immune_until) > 0 ? '<span class="badge ok">immunisé</span>' : ""}${p.active ? "" : '<span class="badge warn">inactif</span>'}</td>
+        <td class="small">${p.last_position ? `${esc(fmtTime(p.last_position.sent_at))}${p.last_position.out ? ` <span class="badge red">${icon("alert")} hors zone ${Math.round(p.last_position.distance_out_m || 0)} m</span>` : ""}` : "—"}${p.out_count > 1 ? ` <span class="small muted">(${p.out_count}× hors zone)</span>` : ""}</td>
+        <td>${p.spotted ? `<span class="badge red">${icon("stop")} repéré</span> ` : ""}${msUntil(p.immune_until) > 0 ? `<span class="badge green">${icon("shield")} immunisé</span> ` : ""}${msUntil(p.cooldown_until) > 0 ? `<span class="badge plain">${icon("lock")} Wanted bloqué</span> ` : ""}${p.active ? "" : `<span class="badge plain">${icon("lock")} inactif</span>`}</td>
         <td class="row" style="gap:4px;flex-wrap:nowrap">
           <button class="small" data-a="photo">Photo</button>
           <button class="small" data-a="ping">Ping</button>
@@ -129,9 +131,9 @@
       const lp = p.last_position;
       if (!lp) return;
       const old = W.now() - new Date(lp.sent_at).getTime() > 20 * 60 * 1000;
-      const color = lp.out ? "#c0392b" : old ? "#9a8f80" : "#6e1423";
+      const color = lp.out ? "#8E1F2C" : old ? "#5C5248" : "#1E3A5F";
       WG.label(WG.dot([lp.lat, lp.lng], { fillColor: color }).addTo(layer),
-        `<b>${esc(p.pseudo)}</b> ${esc(fmtTime(lp.sent_at))}${lp.accuracy ? ` ±${Math.round(lp.accuracy)} m` : ""}`, true);
+        `<b>${esc(p.pseudo)}</b> ${esc(fmtTime(lp.sent_at))}${lp.accuracy ? ` ±${Math.round(lp.accuracy)} m` : ""}${lp.out ? " · hors zone" : old ? " · ancienne" : ""}`, true);
     });
   }
 

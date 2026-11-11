@@ -3,46 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#6e1423" />
+  <meta name="theme-color" content="#8E1F2C" />
+  <meta name="color-scheme" content="light" />
   <title>Wanted</title>
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Stardos+Stencil:wght@400;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.2" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.3" />
 </head>
 <body>
   <div class="wrap">
     <header class="top">
+      <span id="header-elf"></span>
       <div class="brand">WANTED</div>
       <div class="who" id="who"></div>
     </header>
     <main id="app"><p class="center muted">Chargement…</p></main>
-    <section id="messages" class="card hidden">
+    <section id="messages" class="card info hidden">
       <h3>Messages de l'organisation</h3>
       <ul class="msgs" id="msg-list"></ul>
     </section>
   </div>
 
-  <div class="modal hidden" id="capture-modal">
-    <div class="card">
-      <h2>Wanted !</h2>
-      <p class="muted small">Saisis le code à 4 chiffres affiché sur le téléphone de ta cible.</p>
-      <input class="code" id="capture-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" />
-      <p class="small muted" id="capture-feedback"></p>
-      <div class="grid2">
-        <button id="capture-cancel">Annuler</button>
-        <button class="primary" id="capture-submit">Valider</button>
-      </div>
-    </div>
-  </div>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="config.js?v=0.2"></script>
-  <script src="assets/common.js?v=0.2"></script>
-  <script src="assets/geo.js?v=0.2"></script>
-  <script src="assets/player.js?v=0.2"></script>
+  <script src="config.js?v=0.3"></script>
+  <script src="assets/common.js?v=0.3"></script>
+  <script>document.getElementById("header-elf").innerHTML = window.W.elf(1);</script>
+  <script src="assets/geo.js?v=0.3"></script>
+  <script src="assets/player.js?v=0.3"></script>
 </body>
 </html>

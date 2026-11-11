@@ -95,19 +95,34 @@ begin
   insert into _report(test, ok, detail) values ('get_my_state renvoie la cible',
     st->'target'->>'pseudo' = (select pseudo from public.players where id = t_id), st->'target'->>'pseudo');
 
-  -- Anti-essais : le joueur 2 se trompe 3 fois
+  -- Sans « Wanted ! », impossible de saisir un code
   perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
   select target_id into x_id from public.assignments where hunter_id = pid[2] and closed_at is null;
+  r := public.submit_capture((select capture_code from public.players where id = x_id));
+  insert into _report(test, ok, detail) values ('code refusé sans repérage', r->>'reason' = 'no_spot', r->>'reason');
+
+  -- Repérage raté par 3 codes faux : cible immunisée, chasseur bloqué
+  r := public.spot_target();
+  insert into _report(test, ok, detail) values ('Wanted ! : repérage ouvert pour 1 min', (r->>'ok')::boolean, r::text);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[array_position(pid, x_id)], 'role', 'authenticated')::text, true);
+  st := public.get_my_state();
+  insert into _report(test, ok) values ('la cible voit qu''elle est repérée', json_typeof(st->'spotted') = 'object');
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
   v_code := lpad(((select capture_code from public.players where id = x_id)::int + 1) % 10000 || '', 4, '0');
   r := public.submit_capture(v_code);
+  insert into _report(test, ok, detail) values ('1er code faux : encore 2 essais', (r->>'attempts_left')::int = 2, r::text);
   r := public.submit_capture(v_code);
   r := public.submit_capture(v_code);
-  insert into _report(test, ok, detail) values ('3 codes faux : blocage', (r->>'locked_until') is not null, r::text);
-  r := public.submit_capture((select capture_code from public.players where id = x_id));
-  insert into _report(test, ok, detail) values ('bloqué même avec le bon code', r->>'reason' = 'locked', r->>'reason');
+  insert into _report(test, ok, detail) values ('3e code faux : repérage raté', r->>'reason' = 'failed', r::text);
+  insert into _report(test, ok) values ('cible immunisée et chasseur bloqué 2 min',
+    (select immune_until > now() + interval '100 seconds' from public.players where id = x_id)
+    and (select cooldown_until > now() + interval '100 seconds' from public.players where id = pid[2]));
+  r := public.spot_target();
+  insert into _report(test, ok, detail) values ('Wanted ! bloqué pendant 2 min', r->>'reason' = 'cooldown', r->>'reason');
 
   -- Capture réussie par le joueur 1
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  r := public.spot_target();
   v_code := (select capture_code from public.players where id = t_id);
   r := public.submit_capture(v_code);
   insert into _report(test, ok, detail) values ('capture réussie', (r->>'ok')::boolean, r::text);
@@ -121,7 +136,7 @@ begin
     (select p.pseudo from public.assignments a join public.players p on p.id = a.target_id
       where a.hunter_id = pid[1] and a.closed_at is null));
 
-  -- Double envoi : même code une 2e fois
+  -- Double envoi : le repérage est terminé
   r := public.submit_capture(v_code);
   insert into _report(test, ok, detail) values ('double envoi refusé', not (r->>'ok')::boolean, r->>'reason');
 
@@ -129,21 +144,41 @@ begin
   select id into h_id from public.players where id = any(pid) and id not in (pid[1], t_id);
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.org_reassign(h_id, t_id);
-  delete from public.code_attempts where hunter_id = h_id; -- au cas où ce joueur serait celui qui est bloqué
+  update public.players set cooldown_until = null where id = h_id; -- au cas où ce joueur serait celui qui est bloqué
   perform set_config('request.jwt.claims', json_build_object('sub', u[array_position(pid, h_id)], 'role', 'authenticated')::text, true);
-  r := public.submit_capture((select capture_code from public.players where id = t_id));
-  insert into _report(test, ok, detail) values ('cible immunisée protégée', r->>'reason' = 'immune', r->>'reason');
+  r := public.spot_target();
+  insert into _report(test, ok, detail) values ('cible immunisée : Wanted ! refusé', r->>'reason' = 'immune', r->>'reason');
 
   -- Plusieurs chasseurs sur la même cible : tous réattribués
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   update public.players set immune_until = null where id = t_id;
   perform public.org_reassign(pid[1], t_id);
   perform set_config('request.jwt.claims', json_build_object('sub', u[array_position(pid, h_id)], 'role', 'authenticated')::text, true);
+  r := public.spot_target();
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  r := public.spot_target();
+  insert into _report(test, ok, detail) values ('cible déjà repérée par un autre chasseur', r->>'reason' = 'already_spotted', r->>'reason');
+  perform set_config('request.jwt.claims', json_build_object('sub', u[array_position(pid, h_id)], 'role', 'authenticated')::text, true);
   r := public.submit_capture((select capture_code from public.players where id = t_id));
   insert into _report(test, ok, detail) values ('2e capture : les 2 chasseurs de la cible sont réattribués',
     (r->>'ok')::boolean
     and not exists (select 1 from public.assignments where target_id = t_id and closed_at is null),
     r::text);
+
+  -- Minute écoulée sans code : repérage raté automatiquement
+  update public.players set immune_until = null, cooldown_until = null where id = any(pid);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  r := public.spot_target();
+  select target_id into x_id from public.challenges where hunter_id = pid[1] and status = 'active';
+  update public.challenges set expires_at = now() - interval '10 seconds' where hunter_id = pid[1] and status = 'active';
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('minute écoulée : cible immunisée, chasseur bloqué',
+    (r->>'ok')::boolean
+    and json_typeof(st->'spot') = 'null'
+    and (st->'me'->>'locked_until') is not null
+    and (select immune_until > now() from public.players where id = x_id),
+    r::text);
+  update public.players set immune_until = null, cooldown_until = null where id = any(pid);
 
   -- Lecture du classement et de la vue organisateur
   st := public.get_leaderboard();
