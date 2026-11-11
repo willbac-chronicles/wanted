@@ -5,6 +5,9 @@
 -- =====================================================================
 
 create extension if not exists pgcrypto with schema extensions;
+-- Notifications web : appel HTTP de la fonction d'envoi (pg_net) et tâche toutes les 10 s (pg_cron).
+create extension if not exists pg_net with schema extensions;
+create extension if not exists pg_cron with schema pg_catalog;
 
 -- ---------------------------------------------------------------------
 -- Tables
@@ -164,13 +167,58 @@ create unique index if not exists challenges_one_active_per_hunter
 create unique index if not exists challenges_one_active_per_target
   on public.challenges(target_id) where status = 'active';
 
+-- v3 : notifications web (Web Push)
+-- Réglages privés : clés VAPID (créées par la fonction d'envoi), jeton et adresse de la fonction.
+create table if not exists public.app_private_config (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+
+-- Un abonnement par téléphone (un joueur peut en avoir plusieurs).
+create table if not exists public.push_subscriptions (
+  id bigint generated always as identity primary key,
+  player_id uuid not null references public.players(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists push_subscriptions_player on public.push_subscriptions(player_id);
+
+-- File d'envoi : player_id vide = tous les joueurs actifs.
+create table if not exists public.push_jobs (
+  id bigint generated always as identity primary key,
+  kind text not null,
+  round int,
+  ref text,
+  player_id uuid references public.players(id) on delete cascade,
+  title text not null,
+  body text not null,
+  tag text,
+  urgent boolean not null default false,
+  send_at timestamptz not null default now(),
+  expires_at timestamptz,
+  status text not null default 'attente'
+    check (status in ('attente','envoi','envoye','annule','expire','echec')),
+  attempts int not null default 0,
+  locked_at timestamptz,
+  sent_at timestamptz,
+  result jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists push_jobs_due on public.push_jobs(send_at) where status in ('attente','envoi');
+
 -- Aucun accès direct aux tables depuis le front : tout passe par les fonctions.
 do $$
 declare t text;
 begin
   foreach t in array array['games','players','devices','assignments','captures',
                            'score_events','code_attempts','messages','event_log',
-                           'pings','positions','reveals','challenges'] loop
+                           'pings','positions','reveals','challenges',
+                           'app_private_config','push_subscriptions','push_jobs'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from public, anon, authenticated', t);
   end loop;
@@ -253,6 +301,53 @@ returns void language sql security definer
 set search_path = public
 as $$ insert into public.event_log(kind, detail) values (p_kind, p_detail) $$;
 
+-- Réveille la fonction d'envoi des notifications (une fois par transaction au plus).
+-- Ne bloque jamais le jeu : toute erreur est ignorée, la tâche des 10 s rattrapera.
+create or replace function public._push_kick()
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_url text; v_token text;
+begin
+  if coalesce(current_setting('wanted.push_kicked', true), '') = '1' then return; end if;
+  if not exists (select 1 from public.push_jobs
+                  where send_at <= now() and (status = 'attente'
+                        or (status = 'envoi' and locked_at < now() - interval '2 minutes'))) then
+    return;
+  end if;
+  select value into v_url from public.app_private_config where key = 'push_dispatch_url';
+  select value into v_token from public.app_private_config where key = 'push_dispatch_token';
+  if v_url is null or v_token is null then return; end if;
+  perform set_config('wanted.push_kicked', '1', true);
+  begin
+    perform net.http_post(
+      url := v_url,
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-dispatch-token', v_token),
+      body := '{}'::jsonb,
+      timeout_milliseconds := 8000);
+  exception when others then
+    null;
+  end;
+end $$;
+
+-- Met une notification en file. p_player null = tous les joueurs actifs.
+create or replace function public._push(p_player uuid, p_kind text, p_title text, p_body text,
+                                        p_tag text default null, p_urgent boolean default false,
+                                        p_send_at timestamptz default now(),
+                                        p_expires_at timestamptz default null,
+                                        p_round int default null, p_ref text default null)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  insert into public.push_jobs(kind, round, ref, player_id, title, body, tag, urgent, send_at, expires_at)
+  values (p_kind, p_round, p_ref, p_player, p_title, p_body, p_tag, p_urgent, p_send_at,
+          coalesce(p_expires_at, p_send_at + interval '15 minutes'));
+  if p_send_at <= now() then
+    perform public._push_kick();
+  end if;
+end $$;
+
 -- Cible au hasard : ni le chasseur, ni la cible qu'il vient de quitter (si possible).
 create or replace function public._pick_target(p_hunter uuid, p_exclude uuid)
 returns uuid language plpgsql volatile security definer
@@ -308,10 +403,25 @@ as $$
 begin
   delete from public.pings where round = p_round;
   delete from public.reveals where round = p_round;
+  delete from public.push_jobs where kind = 'ping' and round = p_round and status = 'attente';
   insert into public.pings(round, kind, scheduled_at, window_end)
   select p_round, k.kind, p_start + make_interval(mins => k.m),
          p_start + make_interval(mins => k.m, secs => p_window)
     from (values (15, 'chasseur'), (30, 'chasseur'), (40, 'general'), (45, 'chasseur')) as k(m, kind);
+
+  -- Notifications : 1 min avant (le temps d'ouvrir l'appli et de chauffer le GPS), puis à l'heure.
+  insert into public.push_jobs(kind, round, ref, title, body, tag, urgent, send_at, expires_at)
+  select 'ping', p_round, pg.id::text,
+         case when pg.kind = 'general' then 'Ping général dans 1 min' else 'Ping dans 1 min' end,
+         'Ouvre Wanted maintenant : tu auras 1 minute pour envoyer ta position.',
+         'ping-' || pg.id, false, pg.scheduled_at - interval '60 seconds', pg.scheduled_at
+    from public.pings pg where pg.round = p_round and pg.kind in ('chasseur', 'general')
+  union all
+  select 'ping', p_round, pg.id::text,
+         case when pg.kind = 'general' then 'PING GÉNÉRAL : envoie ta position' else 'PING : envoie ta position' end,
+         'Tu as 1 minute. Ping manqué = −3 points.',
+         'ping-' || pg.id, true, pg.scheduled_at, pg.window_end
+    from public.pings pg where pg.round = p_round and pg.kind in ('chasseur', 'general');
 end $$;
 
 -- Fin de manche : −3 par ping manqué, +1 de bonus survivant.
@@ -437,6 +547,9 @@ begin
          set status = 'manche', drawn_round = g.round, updated_at = now()
        where id = 1 returning * into g;
       perform public._log('debut_manche', jsonb_build_object('manche', g.round));
+      perform public._push(null, 'start', 'START ! Manche ' || g.round,
+        'Ta cible est tirée. Ouvre Wanted pour la découvrir.', 'start', true,
+        now(), g.start_at + interval '5 minutes', g.round);
     end if;
 
     if g.status = 'manche' and now() >= g.end_at then
@@ -450,6 +563,10 @@ begin
       update public.games set status = 'regroupement', updated_at = now()
        where id = 1 returning * into g;
       perform public._log('fin_manche', jsonb_build_object('manche', g.round));
+      update public.push_jobs set status = 'annule'
+       where status = 'attente' and kind = 'ping' and round = g.round;
+      perform public._push(null, 'fin', 'Fin de la manche ' || g.round,
+        'Rendez-vous au point de regroupement.', 'fin', true, now(), now() + interval '15 minutes', g.round);
     end if;
   end if;
 
@@ -484,6 +601,9 @@ begin
   perform public._log('repere_echoue', jsonb_build_object(
     'chasseur', (select pseudo from public.players where id = c.hunter_id),
     'cible', (select pseudo from public.players where id = c.target_id)));
+  perform public._push(c.target_id, 'repere_echoue', 'Fausse alerte : tu peux repartir',
+    'Le chasseur n''a pas eu ton code à temps. Tu es immunisé 2 min.', 'repere', false,
+    now(), now() + make_interval(secs => g.immunity_seconds), c.round);
 end $$;
 
 -- Repérages dont la minute est écoulée (+5 s de marge réseau).
@@ -555,7 +675,8 @@ begin
                        where player_id = p.id and round = g.round),
       'captures_round', (select count(*) from public.captures
                           where hunter_id = p.id and round = g.round and not cancelled),
-      'locked_until', public._lock_info(p.id)
+      'locked_until', public._lock_info(p.id),
+      'push_devices', (select count(*) from public.push_subscriptions s where s.player_id = p.id)
     );
 
     if g.status = 'manche' and now() < g.end_at then
@@ -682,6 +803,9 @@ begin
   returning * into c;
 
   perform public._log('repere', jsonb_build_object('chasseur', me.pseudo, 'cible', t.pseudo));
+  perform public._push(t.id, 'repere', 'WANTED ! Tu es repéré, arrête-toi',
+    'Un chasseur arrive. Donne-lui ton code : ' || t.capture_code || '. Il a 1 minute.', 'repere', true,
+    now(), c.expires_at, g.round, c.id::text);
   return json_build_object('ok', true, 'expires_at', c.expires_at);
 end $$;
 
@@ -766,6 +890,11 @@ begin
   foreach v_h in array coalesce(v_hunters, '{}'::uuid[]) loop
     insert into public.assignments(round, hunter_id, target_id)
     values (g.round, v_h, public._pick_target(v_h, t.id));
+    if v_h <> v_me then
+      perform public._push(v_h, 'nouvelle_cible', 'Nouvelle cible',
+        'Ta cible a été capturée par un autre chasseur. Ouvre Wanted pour voir la nouvelle.',
+        'cible', false, now(), now() + interval '10 minutes', g.round);
+    end if;
   end loop;
 
   perform public._log('capture', jsonb_build_object(
@@ -901,6 +1030,7 @@ begin
       select coalesce(json_agg(x order by x.pseudo), '[]'::json) from (
         select p.id, p.pseudo, p.access_code, p.photo_path, p.capture_code, p.immune_until, p.active,
                exists (select 1 from public.devices d where d.player_id = p.id) as linked,
+               (select count(*) from public.push_subscriptions s where s.player_id = p.id) as push_devices,
                (select coalesce(sum(points), 0) from public.score_events s where s.player_id = p.id) as score_total,
                (select coalesce(sum(points), 0) from public.score_events s
                  where s.player_id = p.id and s.round = g.round) as score_round,
@@ -1030,6 +1160,10 @@ begin
          updated_at = now()
    where id = 1;
   perform public._log('dispersion', jsonb_build_object('manche', p_round));
+  update public.push_jobs set status = 'annule' where status = 'attente';
+  perform public._push(null, 'dispersion', 'Dispersion : manche ' || p_round,
+    'Disperse-toi ! START dans ' || g.dispersion_minutes || ' min.', 'dispersion', true,
+    now(), now() + make_interval(mins => g.dispersion_minutes), p_round);
 end $$;
 
 -- Secours : avance le START à maintenant et lance le tirage.
@@ -1135,6 +1269,8 @@ as $$
 begin
   perform public._require_org();
   insert into public.messages(player_id, body) values (p_player, trim(p_body));
+  perform public._push(p_player, 'message', 'Message de l''organisation', left(trim(p_body), 180),
+    null, true, now(), now() + interval '30 minutes');
 end $$;
 
 -- Ping manuel : un joueur (p_player) ou tout le monde (null), même fenêtre que les pings automatiques.
@@ -1142,13 +1278,17 @@ create or replace function public.org_request_position(p_player uuid default nul
 returns void language plpgsql volatile security definer
 set search_path = public
 as $$
-declare g public.games;
+declare g public.games; v_ping bigint;
 begin
   perform public._require_org();
   g := public._tick();
   if g.status <> 'manche' then raise exception 'Aucune manche en cours'; end if;
   insert into public.pings(round, kind, scheduled_at, window_end, player_id)
-  values (g.round, 'manuel', now(), now() + make_interval(secs => g.ping_window_seconds), p_player);
+  values (g.round, 'manuel', now(), now() + make_interval(secs => g.ping_window_seconds), p_player)
+  returning id into v_ping;
+  perform public._push(p_player, 'ping', 'PING : envoie ta position',
+    'L''organisation demande ta position. Tu as 1 minute.', 'ping-' || v_ping, true,
+    now(), now() + make_interval(secs => g.ping_window_seconds), g.round, v_ping::text);
   perform public._log('ping_manuel', jsonb_build_object(
     'joueur', coalesce((select pseudo from public.players where id = p_player), 'tous')));
 end $$;
@@ -1186,6 +1326,8 @@ begin
   select coalesce(array_agg(photo_path), '{}') into v_paths from public.players where photo_path is not null;
   delete from public.positions where true;
   delete from public.reveals where true;
+  delete from public.push_subscriptions where true;
+  delete from public.push_jobs where true;
   update public.players set photo_path = null where photo_path is not null;
   perform public._log('purge', null);
   return v_paths;
@@ -1207,12 +1349,122 @@ begin
   delete from public.code_attempts where true;
   delete from public.messages where true;
   delete from public.event_log where true;
+  delete from public.push_jobs where true;
   update public.players set capture_code = public._new_capture_code(capture_code), immune_until = null, cooldown_until = null where true;
   update public.games
      set status = 'accueil', round = 0, drawn_round = 0, round_scored = 0,
          dispersion_started_at = null, start_at = null, end_at = null, updated_at = now()
    where id = 1;
   perform public._log('reinitialisation', null);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Notifications web
+-- ---------------------------------------------------------------------
+
+-- Le téléphone du joueur enregistre son abonnement (après son accord).
+create or replace function public.save_push_subscription(p_endpoint text, p_p256dh text, p_auth text,
+                                                         p_user_agent text default null)
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id();
+begin
+  if v_me is null then raise exception 'Joueur non connecté'; end if;
+  if coalesce(p_endpoint, '') !~ '^https://' or coalesce(p_p256dh, '') = '' or coalesce(p_auth, '') = '' then
+    raise exception 'Abonnement invalide';
+  end if;
+  insert into public.push_subscriptions(player_id, endpoint, p256dh, auth, user_agent)
+  values (v_me, p_endpoint, p_p256dh, p_auth, left(p_user_agent, 300))
+  on conflict (endpoint) do update
+     set player_id = excluded.player_id, p256dh = excluded.p256dh, auth = excluded.auth,
+         user_agent = excluded.user_agent, updated_at = now();
+  return json_build_object('ok', true,
+    'devices', (select count(*) from public.push_subscriptions where player_id = v_me));
+end $$;
+
+create or replace function public.remove_push_subscription(p_endpoint text)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  delete from public.push_subscriptions
+   where endpoint = p_endpoint and player_id = public._my_player_id();
+end $$;
+
+-- Pour tester : l'organisateur envoie une notification à un joueur (ou à tous).
+create or replace function public.org_test_push(p_player uuid default null)
+returns int language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  perform public._push(p_player, 'test', 'Test Wanted', 'Les notifications fonctionnent sur ce téléphone.',
+    'test', true, now(), now() + interval '10 minutes');
+  return (select count(*) from public.push_subscriptions s join public.players p on p.id = s.player_id
+           where p.active and (p_player is null or s.player_id = p_player));
+end $$;
+
+-- Réservé à la fonction d'envoi (rôle service) : prend les notifications dues avec leurs destinataires.
+create or replace function public.claim_push_jobs()
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v json;
+begin
+  update public.push_jobs set status = 'expire'
+   where status in ('attente', 'envoi') and expires_at < now();
+  update public.push_jobs set status = 'echec'
+   where status = 'envoi' and locked_at < now() - interval '2 minutes' and attempts >= 3;
+
+  with picked as (
+    select id from public.push_jobs
+     where send_at <= now()
+       and (status = 'attente' or (status = 'envoi' and locked_at < now() - interval '2 minutes'))
+     order by send_at
+     limit 20
+     for update skip locked),
+  upd as (
+    update public.push_jobs j
+       set status = 'envoi', locked_at = now(), attempts = j.attempts + 1
+      from picked where j.id = picked.id
+    returning j.*)
+  select coalesce(json_agg(json_build_object(
+           'id', u.id, 'kind', u.kind, 'title', u.title, 'body', u.body,
+           'tag', coalesce(u.tag, u.kind || '-' || u.id), 'urgent', u.urgent,
+           'ttl', greatest(30, least(86400, extract(epoch from (u.expires_at - now()))::int)),
+           'subs', (select coalesce(json_agg(json_build_object(
+                             'endpoint', s.endpoint, 'p256dh', s.p256dh, 'auth', s.auth)), '[]'::json)
+                      from public.push_subscriptions s
+                      join public.players p on p.id = s.player_id
+                     where p.active and (u.player_id is null or s.player_id = u.player_id)))), '[]'::json)
+    into v
+    from upd u;
+  return v;
+end $$;
+
+create or replace function public.finish_push_job(p_id bigint, p_result jsonb)
+returns void language sql volatile security definer
+set search_path = public
+as $$
+  update public.push_jobs set status = 'envoye', sent_at = now(), locked_at = null, result = p_result
+   where id = p_id;
+$$;
+
+create or replace function public.drop_push_subscription(p_endpoint text)
+returns void language sql volatile security definer
+set search_path = public
+as $$ delete from public.push_subscriptions where endpoint = p_endpoint $$;
+
+-- Tâche planifiée (toutes les 10 s) : fait avancer la partie même si aucun téléphone n'est ouvert
+-- (START, fin de manche, repérages expirés), puis réveille l'envoi des notifications dues.
+create or replace function public._cron_tick()
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._tick();
+  perform public._push_kick();
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -1229,7 +1481,9 @@ begin
      where n.nspname = 'public'
        and (p.proname like '\_%' or p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture','get_leaderboard',
-                             'send_position','get_perimeter','spot_target'))
+                             'send_position','get_perimeter','spot_target','save_push_subscription',
+                             'remove_push_subscription','claim_push_jobs','finish_push_job',
+                             'drop_push_subscription'))
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
@@ -1240,11 +1494,27 @@ begin
      where n.nspname = 'public'
        and (p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture',
-                             'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org'))
+                             'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org',
+                             'save_push_subscription','remove_push_subscription'))
   loop
     execute format('grant execute on function %s to authenticated', f.sig);
   end loop;
 end $$;
+
+-- La fonction d'envoi (clé serveur, rôle service_role) lit les clés VAPID et la file.
+grant select, insert, update on table public.app_private_config to service_role;
+grant execute on function public.claim_push_jobs() to service_role;
+grant execute on function public.finish_push_job(bigint, jsonb) to service_role;
+grant execute on function public.drop_push_subscription(text) to service_role;
+
+-- Adresse de la fonction d'envoi et jeton partagé (générés une fois, jamais exposés au front).
+insert into public.app_private_config(key, value) values
+  ('push_dispatch_url', 'https://yimuwduqpytkvnkrppeo.supabase.co/functions/v1/push-dispatch'),
+  ('push_dispatch_token', encode(extensions.gen_random_bytes(24), 'hex'))
+on conflict (key) do nothing;
+
+-- Tâche toutes les 10 s (remplacée si elle existe déjà).
+select cron.schedule('wanted_tick', '10 seconds', 'select public._cron_tick()');
 
 -- ---------------------------------------------------------------------
 -- Photos : bucket privé

@@ -24,6 +24,9 @@ begin
     raise exception 'Une partie est en cours : test annulé';
   end if;
 
+  -- Pas d'appel HTTP réel à la fonction d'envoi pendant le test.
+  perform set_config('wanted.push_kicked', '1', true);
+
   -- Organisateur
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.claim_organizer((select org_code from public.games where id = 1));
@@ -79,6 +82,20 @@ begin
   insert into _report(test, ok, detail) values ('dispersion : aucune cible',
     st->'game'->>'status' = 'dispersion' and json_typeof(st->'target') = 'null', st->'game'->>'status');
 
+  -- Notifications : abonnement du joueur 1
+  r := public.save_push_subscription('https://push.example.test/abc', 'cle', 'auth', 'test');
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('notif : abonnement enregistré',
+    (st->'me'->>'push_devices')::int = 1, st->'me'->>'push_devices');
+  begin
+    perform public.save_push_subscription('http://pas-https', 'cle', 'auth', null);
+    insert into _report(test, ok) values ('notif : abonnement invalide refusé', false);
+  exception when others then
+    insert into _report(test, ok) values ('notif : abonnement invalide refusé', true);
+  end;
+  insert into _report(test, ok) values ('notif : dispersion en file',
+    exists (select 1 from public.push_jobs where kind = 'dispersion' and status = 'attente'));
+
   -- START forcé : tirage en boucle
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.org_draw_now();
@@ -87,6 +104,11 @@ begin
     and (select count(distinct target_id) from public.assignments where closed_at is null and hunter_id = any(pid)) = 3
     and not exists (select 1 from public.assignments where hunter_id = target_id),
     (select status from public.games where id = 1));
+  insert into _report(test, ok, detail) values ('notif : START + 8 notifications de ping programmées',
+    exists (select 1 from public.push_jobs where kind = 'start')
+    and (select count(*) from public.push_jobs where kind = 'ping' and round = 1 and status = 'attente'
+            and send_at > now()) = 8,
+    (select count(*) from public.push_jobs where kind = 'ping')::text);
 
   -- Joueur 1 voit sa cible
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
@@ -104,6 +126,9 @@ begin
   -- Repérage raté par 3 codes faux : cible immunisée, chasseur bloqué
   r := public.spot_target();
   insert into _report(test, ok, detail) values ('Wanted ! : repérage ouvert pour 1 min', (r->>'ok')::boolean, r::text);
+  insert into _report(test, ok) values ('notif : alerte urgente à la cible avec son code',
+    exists (select 1 from public.push_jobs where kind = 'repere' and player_id = x_id and urgent
+              and body like '%' || (select capture_code from public.players where id = x_id) || '%'));
   perform set_config('request.jwt.claims', json_build_object('sub', u[array_position(pid, x_id)], 'role', 'authenticated')::text, true);
   st := public.get_my_state();
   insert into _report(test, ok) values ('la cible voit qu''elle est repérée', json_typeof(st->'spotted') = 'object');
@@ -119,6 +144,20 @@ begin
     and (select cooldown_until > now() + interval '100 seconds' from public.players where id = pid[2]));
   r := public.spot_target();
   insert into _report(test, ok, detail) values ('Wanted ! bloqué pendant 2 min', r->>'reason' = 'cooldown', r->>'reason');
+  insert into _report(test, ok) values ('notif : fausse alerte signalée à la cible',
+    exists (select 1 from public.push_jobs where kind = 'repere_echoue' and player_id = x_id));
+
+  -- Envoi : la fonction d'envoi récupère les notifications dues avec les abonnements
+  r := public.claim_push_jobs();
+  insert into _report(test, ok, detail) values ('notif : file prise avec destinataires',
+    exists (select 1 from json_array_elements(r) e
+             where e->>'kind' = 'dispersion' and json_array_length(e->'subs') = 1)
+    and not exists (select 1 from json_array_elements(r) e where e->>'kind' = 'ping'),
+    left(r::text, 180));
+  perform public.finish_push_job((select min(id) from public.push_jobs where status = 'envoi'), '{}'::jsonb);
+  perform public.drop_push_subscription('https://push.example.test/abc');
+  insert into _report(test, ok) values ('notif : abonnement expiré supprimé',
+    not exists (select 1 from public.push_subscriptions where endpoint = 'https://push.example.test/abc'));
 
   -- Capture réussie par le joueur 1
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
@@ -249,6 +288,9 @@ begin
 
   -- Fin de manche
   perform public.org_end_round();
+  insert into _report(test, ok) values ('notif : pings restants annulés, fin de manche annoncée',
+    not exists (select 1 from public.push_jobs where kind = 'ping' and status = 'attente')
+    and exists (select 1 from public.push_jobs where kind = 'fin'));
   insert into _report(test, ok, detail) values ('−3 par ping manqué (1 manuel + 3 sur le ping passé)',
     (select count(*) from public.score_events where reason = 'ping manqué' and points = -3) = 4,
     (select string_agg(p.pseudo, ', ') from public.score_events s join public.players p on p.id = s.player_id where s.reason = 'ping manqué'));
@@ -274,7 +316,8 @@ begin
   delete from public.players where id = any(pid);
   delete from public.devices where auth_uid = any(u) or auth_uid = u_org;
   delete from public.event_log where true;
-  insert into _report(test, ok) values ('nettoyage', not exists (select 1 from public.players where pseudo like '\_\_test\_%'));
+  insert into _report(test, ok) values ('nettoyage', not exists (select 1 from public.players where pseudo like '\_\_test\_%')
+    and not exists (select 1 from public.push_jobs));
 exception when others then
   get stacked diagnostics v_err = pg_exception_context;
   insert into _report(test, ok, detail) values ('ERREUR : ' || sqlerrm, false, v_err);

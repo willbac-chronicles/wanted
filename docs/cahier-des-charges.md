@@ -23,7 +23,7 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 | Limite | Choix |
 |---|---|
 | Le navigateur ne peut pas envoyer la position si le téléphone est verrouillé ou la page fermée | Le joueur appuie sur **« Envoyer ma position »** dans une fenêtre de **1 min** après l'heure du ping (+10 s de marge réseau côté serveur). Le GPS est « réchauffé » 45 s avant chaque ping. [C] |
-| Notifications web peu fiables sur iPhone | Bandeau, son et vibration quand la page est ouverte, plus un groupe de messagerie de secours. Pas de notifications web en v1. [P] |
+| Prévenir un joueur téléphone verrouillé | **Notifications web (Web Push)** : « Wanted ! » à la cible (avec son code), pings (1 min avant puis à l'heure), START, fin de manche, nouvelle cible, messages de l'organisation. Sur iPhone : iOS 16.4+ et appli ajoutée à l'écran d'accueil. Bandeau, son et vibration en plus quand la page est ouverte. [C] |
 | La clé publique Supabase est visible dans le code | Aucun accès direct aux tables : tout passe par des fonctions SQL (§ 6). [C] |
 | Horloges des téléphones décalées | Toutes les heures viennent du serveur ; `get_my_state` renvoie `server_now` et le front calcule les minuteurs à partir de là. [C] |
 | Le site est statique : rien ne déclenche les événements à heure fixe | Tout est **déduit de l'heure de START** (fenêtres de ping, fin de manche). Le tirage se fait au premier appel après la fin de la dispersion, sous verrou. `pg_cron` en complément si besoin. [C] |
@@ -84,7 +84,7 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 3. Une cible ne peut être repérée que par un chasseur à la fois. « Wanted ! » est indisponible si la cible est immunisée.
 4. Ce mécanisme remplace l'ancien blocage « 3 codes faux en 5 min ».
 
-Limite : la cible n'est prévenue que si la page est ouverte (pas de notification quand le téléphone est verrouillé). Le front interroge le serveur toutes les 3 s pendant une manche.
+La cible reçoit une notification web urgente (même téléphone verrouillé, si elle les a activées) et, page ouverte, un bandeau avec bip et vibration. Le front interroge le serveur toutes les 3 s pendant une manche ; une tâche `pg_cron` fait avancer la partie toutes les 10 s même si aucun téléphone n'est ouvert.
 
 **Pings**
 - Ping chasseur : chaque chasseur voit la position envoyée par sa cible. [C]

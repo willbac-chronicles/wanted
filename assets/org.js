@@ -57,7 +57,7 @@
       g.status === "manche" ? `Démarrée à ${fmtTime(g.start_at)}, fin à ${fmtTime(g.end_at)}` : "";
 
     const ps = data.players;
-    $("p-count").textContent = `(${ps.filter(p => p.active).length} actifs, ${ps.filter(p => p.linked).length} connectés)`;
+    $("p-count").textContent = `(${ps.filter(p => p.active).length} actifs, ${ps.filter(p => p.linked).length} connectés, ${ps.filter(p => p.push_devices > 0).length} avec notifications)`;
     $("players").innerHTML = ps.map(p => `
       <tr data-id="${esc(p.id)}" style="${p.active ? "" : "opacity:.5"}">
         <td><img class="thumb" data-photo="${esc(p.photo_path || "")}" alt="" /></td>
@@ -69,7 +69,7 @@
         <td>${esc(p.target || "—")}</td>
         <td>${esc(p.hunters)}</td>
         <td class="small">${p.last_position ? `${esc(fmtTime(p.last_position.sent_at))}${p.last_position.out ? ` <span class="badge red">${icon("alert")} hors zone ${Math.round(p.last_position.distance_out_m || 0)} m</span>` : ""}` : "—"}${p.out_count > 1 ? ` <span class="small muted">(${p.out_count}× hors zone)</span>` : ""}</td>
-        <td>${p.spotted ? `<span class="badge red">${icon("stop")} repéré</span> ` : ""}${msUntil(p.immune_until) > 0 ? `<span class="badge green">${icon("shield")} immunisé</span> ` : ""}${msUntil(p.cooldown_until) > 0 ? `<span class="badge plain">${icon("lock")} Wanted bloqué</span> ` : ""}${p.active ? "" : `<span class="badge plain">${icon("lock")} inactif</span>`}</td>
+        <td>${p.push_devices > 0 ? `<span class="badge green">${icon("check")} notif</span> ` : `<span class="badge plain">${icon("alert")} sans notif</span> `}${p.spotted ? `<span class="badge red">${icon("stop")} repéré</span> ` : ""}${msUntil(p.immune_until) > 0 ? `<span class="badge green">${icon("shield")} immunisé</span> ` : ""}${msUntil(p.cooldown_until) > 0 ? `<span class="badge plain">${icon("lock")} Wanted bloqué</span> ` : ""}${p.active ? "" : `<span class="badge plain">${icon("lock")} inactif</span>`}</td>
         <td class="row" style="gap:4px;flex-wrap:nowrap">
           <button class="small" data-a="photo">Photo</button>
           <button class="small" data-a="ping">Ping</button>
@@ -170,8 +170,16 @@
       if (a === "reset") act("org_reset", {}, "Tout réinitialiser ? Captures, scores, cibles, pings, positions, messages et journal seront effacés. Les joueurs et les photos sont conservés.");
       if (a === "pingall") act("org_request_position", { p_player: null }, "Demander leur position à tous les joueurs ? Ils auront 1 minute (−3 s'ils ne l'envoient pas).");
       if (a === "purge") purge();
+      if (a === "testpush") testPush();
     };
   });
+
+  async function testPush() {
+    try {
+      const n = await rpc("org_test_push", { p_player: null });
+      toast(n ? `Notification de test envoyée à ${n} téléphone(s).` : "Aucun téléphone n'a encore activé les notifications.", n ? "ok" : "red");
+    } catch (e) { toast(e.message, "red"); }
+  }
 
   // ---------- Joueurs ----------
 

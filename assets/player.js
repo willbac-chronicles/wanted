@@ -84,6 +84,7 @@
         <h2>En attente du départ</h2>
         <p>Tu es inscrit. L'organisation lancera bientôt la dispersion.</p>
       </div>
+      <div id="push-box"></div>
       <div class="card">
         <h3>Règles clés</h3>
         <ul>
@@ -92,7 +93,7 @@
           <li>Code bon : <b>+3</b> pour toi, <b>−2</b> pour elle. Minute écoulée : elle est <b>immunisée 2 min</b> et ton bouton est <b>bloqué 2 min</b>.</li>
           <li>Si tu es repéré, arrête-toi et montre ton code au chasseur.</li>
           <li>Aux pings, tu as <b>1 minute</b> pour appuyer sur « Envoyer ma position ». Ping manqué : <b>−3</b>.</li>
-          <li>Garde cette page ouverte et le son activé pendant la partie.</li>
+          <li>Active les notifications ci-dessus, garde le son activé et coupe « Ne pas déranger » pendant la partie.</li>
         </ul>
       </div>
       ${geoPermissionCard()}`;
@@ -129,6 +130,7 @@
         <div class="countdown" data-until="${esc(state.game.start_at)}" data-refresh-at-zero="1">--:--</div>
         <p class="small muted">START à ${esc(fmtTime(state.game.start_at))}</p>
       </div>
+      <div id="push-box"></div>
       ${geoPermissionCard()}`;
     bindGeoPermission();
   }
@@ -144,6 +146,7 @@
         </div>
       </div>
       <div id="spotted-box"></div>
+      <div id="push-box"></div>
       ${t ? `
       <div class="poster">
         <div class="wanted">WANTED</div>
@@ -576,6 +579,7 @@
       state = next;
       render();
       updateMap();
+      if (window.WP && next.me) window.WP.fill($("push-box"), next.me.push_devices, next.game.status === "manche");
       if (next.game.status !== "manche") WG.stopWarmup();
       if (["regroupement", "termine"].includes(next.game.status) && next.me) loadBoard();
     } catch (e) {
