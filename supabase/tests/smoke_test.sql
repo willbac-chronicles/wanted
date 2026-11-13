@@ -300,8 +300,9 @@ begin
     not exists (select 1 from public.push_jobs where kind = 'ping' and status = 'attente')
     and exists (select 1 from public.push_jobs where kind = 'fin'));
   insert into _report(test, ok, detail) values ('−3 par ping manqué (1 manuel + 3 sur le ping passé)',
-    (select count(*) from public.score_events where reason = 'ping manqué' and points = -3) = 4,
-    (select string_agg(p.pseudo, ', ') from public.score_events s join public.players p on p.id = s.player_id where s.reason = 'ping manqué'));
+    (select count(*) from public.score_events where reason = 'ping manqué' and points = -3 and player_id = any(pid)) = 4,
+    (select string_agg(p.pseudo, ', ') from public.score_events s join public.players p on p.id = s.player_id
+      where s.reason = 'ping manqué' and s.player_id = any(pid)));
   insert into _report(test, ok, detail) values ('bonus survivant au joueur à 2 chasseurs',
     (select count(*) from public.score_events where reason = 'bonus survivant') = 1
     and exists (select 1 from public.score_events where reason = 'bonus survivant' and player_id = pid[3]),
