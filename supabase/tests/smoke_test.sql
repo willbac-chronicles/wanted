@@ -338,7 +338,10 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
   st := public.get_my_state();
   insert into _report(test, ok, detail) values ('quête visible et comptée à faire',
-    (st->'quests'->>'todo')::int = 1
+    -- (les vraies quêtes déjà créées par l'organisation comptent aussi)
+    (st->'quests'->>'todo')::int = (select count(*) from public.quests q
+                                      where q.active and q.player_id is null
+                                        and (q.round is null or q.round = (select round from public.games where id = 1)))
     and exists (select 1 from json_array_elements(public.get_quests()) e where (e->>'id')::bigint = v_quest),
     (st->'quests')::text);
   r := public.claim_quest(v_quest, 'fait à 15 h');
