@@ -127,6 +127,11 @@ begin
   select target_id into t_id from public.assignments where hunter_id = pid[1] and closed_at is null;
   insert into _report(test, ok, detail) values ('get_my_state renvoie la cible',
     st->'target'->>'pseudo' = (select pseudo from public.players where id = t_id), st->'target'->>'pseudo');
+  insert into _report(test, ok, detail) values ('motif tiré pour chaque cible',
+    not exists (select 1 from public.assignments where motif is null)
+    and (st->'target'->>'motif')::int between 1 and 40, st->'target'->>'motif');
+  insert into _report(test, ok, detail) values ('barème transmis à l''interface',
+    (st->'game'->'points'->>'capture')::int = (select capture_points from public.games where id = 1), (st->'game'->'points')::text);
   insert into _report(test, ok, detail) values ('compteur : 1 chasseur après le tirage en boucle',
     (st->'me'->>'hunters')::int = 1, st->'me'->>'hunters');
 
@@ -303,6 +308,9 @@ begin
     (1, pid[1], pid[3], now() - interval '30 minutes'),
     (1, pid[2], pid[3], now() - interval '30 minutes'),
     (1, pid[3], pid[1], now() - interval '30 minutes');
+
+  insert into _report(test, ok) values ('motif jamais vu deux fois par un même chasseur',
+    not exists (select 1 from public.assignments group by hunter_id, motif having count(*) > 1));
 
   -- Fin de manche
   perform public.org_end_round();

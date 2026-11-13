@@ -111,6 +111,11 @@ alter table public.games add column if not exists perimeter jsonb;
 alter table public.games add column if not exists ping_window_seconds int not null default 60;
 alter table public.games add column if not exists missed_ping_penalty int not null default -3;
 alter table public.games add column if not exists round_scored int not null default 0;
+-- v6 : barème modifiable (lu par l'interface), motif de l'avis de recherche tiré à chaque cible.
+alter table public.games add column if not exists capture_points int not null default 3;
+alter table public.games add column if not exists captured_penalty int not null default -2;
+alter table public.games add column if not exists survivor_bonus int not null default 1;
+alter table public.assignments add column if not exists motif int check (motif is null or motif between 1 and 40);
 
 -- Un ping = une fenêtre pendant laquelle les joueurs concernés doivent envoyer leur position.
 create table if not exists public.pings (
@@ -274,6 +279,28 @@ create table if not exists public.chat_reads (
   last_id bigint not null default 0,
   primary key (viewer, conv)
 );
+
+-- Motif de l'avis de recherche : tiré à chaque nouvelle cible, parmi les motifs que ce chasseur
+-- n'a encore jamais vus pendant la partie (40 motifs, listés dans assets/textes.js).
+create or replace function public._assign_motif()
+returns trigger language plpgsql security definer
+set search_path = public
+as $$
+declare v int;
+begin
+  if new.motif is null then
+    select m into v from generate_series(1, 40) m
+     where m not in (select a.motif from public.assignments a
+                      where a.hunter_id = new.hunter_id and a.motif is not null)
+     order by random() limit 1;
+    -- Les 40 déjà vus (impossible en 2 h) : on repart de la liste complète.
+    new.motif := coalesce(v, 1 + floor(random() * 40)::int);
+  end if;
+  return new;
+end $$;
+drop trigger if exists assignments_motif on public.assignments;
+create trigger assignments_motif before insert on public.assignments
+  for each row execute function public._assign_motif();
 
 -- Aucun accès direct aux tables depuis le front : tout passe par les fonctions.
 do $$
@@ -477,14 +504,16 @@ begin
   -- Notifications : 1 min avant (le temps d'ouvrir l'appli et de chauffer le GPS), puis à l'heure.
   insert into public.push_jobs(kind, round, ref, title, body, tag, urgent, send_at, expires_at)
   select 'ping', p_round, pg.id::text,
-         case when pg.kind = 'general' then 'Ping général dans 1 min' else 'Ping dans 1 min' end,
-         'Ouvre Wanted maintenant : tu auras 1 minute pour envoyer ta position.',
+         'Le Père Noël consulte son registre…',
+         'Ping dans 1 minute. Garde ton téléphone en main.',
          'ping-' || pg.id, false, pg.scheduled_at - interval '60 seconds', pg.scheduled_at
     from public.pings pg where pg.round = p_round and pg.kind in ('chasseur', 'general')
   union all
   select 'ping', p_round, pg.id::text,
-         case when pg.kind = 'general' then 'PING GÉNÉRAL : envoie ta position' else 'PING : envoie ta position' end,
-         'Tu as 1 minute. Ping manqué = −3 points.',
+         case when pg.kind = 'general' then 'Le Père Noël se rapproche !' else 'Le Père Noël t''a repéré !' end,
+         case when pg.kind = 'general' then 'Envoie ta position : tout le monde verra tout le monde.'
+              else 'Envoie ta position : seuls tes chasseurs la verront.' end
+           || ' 1 minute, sinon −' || (select abs(missed_ping_penalty) from public.games where id = 1) || '.',
          'ping-' || pg.id, true, pg.scheduled_at, pg.window_end
     from public.pings pg where pg.round = p_round and pg.kind in ('chasseur', 'general');
 end $$;
@@ -512,7 +541,7 @@ begin
 
   -- Bonus survivant : à un ping chasseur, au moins 2 chasseurs et pas trouvé depuis le ping chasseur précédent.
   insert into public.score_events(player_id, round, points, reason, ref)
-  select p.id, p_round, 1, 'bonus survivant', pg.id::text
+  select p.id, p_round, g.survivor_bonus, 'bonus survivant', pg.id::text
     from public.pings pg
     join public.players p on p.active
    where pg.round = p_round and pg.kind = 'chasseur' and pg.scheduled_at <= now()
@@ -612,8 +641,8 @@ begin
          set status = 'manche', drawn_round = g.round, updated_at = now()
        where id = 1 returning * into g;
       perform public._log('debut_manche', jsonb_build_object('manche', g.round));
-      perform public._push(null, 'start', 'START ! Manche ' || g.round,
-        'Ta cible est tirée. Ouvre Wanted pour la découvrir.', 'start', true,
+      perform public._push(null, 'start', 'Avis de recherche reçu',
+        'Ta cible se cache quelque part en ville. Ouvre Wanted.', 'start', true,
         now(), g.start_at + interval '5 minutes', g.round);
     end if;
 
@@ -630,8 +659,8 @@ begin
       perform public._log('fin_manche', jsonb_build_object('manche', g.round));
       update public.push_jobs set status = 'annule'
        where status = 'attente' and kind = 'ping' and round = g.round;
-      perform public._push(null, 'fin', 'Fin de la manche ' || g.round,
-        'Rendez-vous au point de regroupement.', 'fin', true, now(), now() + interval '15 minutes', g.round);
+      perform public._push(null, 'fin', 'Fin de la journée de travail',
+        'Retour au point de rendez-vous.', 'fin', true, now(), now() + interval '15 minutes', g.round);
     end if;
   end if;
 
@@ -666,8 +695,8 @@ begin
   perform public._log('repere_echoue', jsonb_build_object(
     'chasseur', (select pseudo from public.players where id = c.hunter_id),
     'cible', (select pseudo from public.players where id = c.target_id)));
-  perform public._push(c.target_id, 'repere_echoue', 'Fausse alerte : tu peux repartir',
-    'Le chasseur n''a pas eu ton code à temps. Tu es immunisé 2 min.', 'repere', false,
+  perform public._push(c.target_id, 'repere_echoue', 'Fausse alerte, tu t''en sors',
+    'Immunité de 2 min.', 'repere', false,
     now(), now() + make_interval(secs => g.immunity_seconds), c.round);
 end $$;
 
@@ -746,11 +775,16 @@ begin
       'hunters', case when g.status = 'manche' then
                    (select count(*) from public.assignments a
                      where a.target_id = p.id and a.closed_at is null and a.round = g.round)
-                 else 0 end
+                 else 0 end,
+      -- Derniers points gagnés ou perdus (alertes « ping manqué », « bonus survivant »).
+      'last_scores', (select coalesce(json_agg(x order by x.id), '[]'::json) from (
+                        select s.id, s.reason, s.points from public.score_events s
+                         where s.player_id = p.id order by s.id desc limit 10) x)
     );
 
     if g.status = 'manche' and now() < g.end_at then
       select json_build_object('pseudo', t.pseudo, 'photo_path', t.photo_path, 'assigned_at', a.assigned_at,
+                               'motif', a.motif,
                                'immune_until', case when t.immune_until > now() then t.immune_until end,
                                'position', public._hunter_view(t.id, g.round))
         into v_target
@@ -766,7 +800,9 @@ begin
       'status', g.status, 'round', g.round,
       'dispersion_started_at', g.dispersion_started_at,
       'start_at', g.start_at, 'end_at', g.end_at,
-      'immunity_seconds', g.immunity_seconds),
+      'immunity_seconds', g.immunity_seconds,
+      'points', json_build_object('capture', g.capture_points, 'captured', abs(g.captured_penalty),
+                                  'missed_ping', abs(g.missed_ping_penalty), 'survivor', g.survivor_bonus)),
     'me', v_me_json,
     'target', v_target,
     -- Mon repérage en cours (en tant que chasseur).
@@ -781,6 +817,7 @@ begin
     'pings', (
       select coalesce(json_agg(json_build_object(
                'id', pg.id, 'kind', pg.kind, 'scheduled_at', pg.scheduled_at, 'window_end', pg.window_end,
+               'for_all', pg.player_id is null,
                'sent', exists (select 1 from public.positions po where po.ping_id = pg.id and po.player_id = v_me))
              order by pg.scheduled_at), '[]'::json)
         from public.pings pg
@@ -889,8 +926,8 @@ begin
   returning * into c;
 
   perform public._log('repere', jsonb_build_object('chasseur', me.pseudo, 'cible', t.pseudo));
-  perform public._push(t.id, 'repere', 'WANTED ! Tu es repéré, arrête-toi',
-    'Un chasseur arrive. Donne-lui ton code : ' || t.capture_code || '. Il a 1 minute.', 'repere', true,
+  perform public._push(t.id, 'repere', 'Un collègue t''a dénoncé !',
+    'Arrête-toi et donne ton code au lutin qui s''approche : ' || t.capture_code || '. 1 minute.', 'repere', true,
     now(), c.expires_at, g.round, c.id::text);
   return json_build_object('ok', true, 'expires_at', c.expires_at);
 end $$;
@@ -958,8 +995,8 @@ begin
   insert into public.captures(round, hunter_id, target_id)
   values (g.round, v_me, t.id) returning id into v_capture_id;
   insert into public.score_events(player_id, round, points, reason, ref) values
-    (v_me, g.round, 3, 'capture', v_capture_id::text),
-    (t.id, g.round, -2, 'capturé', v_capture_id::text);
+    (v_me, g.round, g.capture_points, 'capture', v_capture_id::text),
+    (t.id, g.round, g.captured_penalty, 'capturé', v_capture_id::text);
 
   update public.players
      set capture_code = public._new_capture_code(t.capture_code),
@@ -977,8 +1014,8 @@ begin
     insert into public.assignments(round, hunter_id, target_id)
     values (g.round, v_h, public._pick_target(v_h, t.id));
     if v_h <> v_me then
-      perform public._push(v_h, 'nouvelle_cible', 'Nouvelle cible',
-        'Ta cible a été capturée par un autre chasseur. Ouvre Wanted pour voir la nouvelle.',
+      perform public._push(v_h, 'nouvelle_cible', 'Un collègue a été plus rapide',
+        'Ta cible a été balancée. Nouvelle cible en route.',
         'cible', false, now(), now() + interval '10 minutes', g.round);
     end if;
   end loop;
@@ -1251,8 +1288,8 @@ begin
    where id = 1;
   perform public._log('dispersion', jsonb_build_object('manche', p_round));
   update public.push_jobs set status = 'annule' where status = 'attente';
-  perform public._push(null, 'dispersion', 'Dispersion : manche ' || p_round,
-    'Disperse-toi ! START dans ' || g.dispersion_minutes || ' min.', 'dispersion', true,
+  perform public._push(null, 'dispersion', 'Dispersez-vous, le contremaître arrive !',
+    g.dispersion_minutes || ' min pour t''éloigner. Pas de cible, pas de capture.', 'dispersion', true,
     now(), now() + make_interval(mins => g.dispersion_minutes), p_round);
 end $$;
 
@@ -1323,9 +1360,11 @@ begin
   perform public._require_org();
   update public.captures set cancelled = true where id = p_capture and not cancelled returning * into c;
   if c.id is null then raise exception 'Capture introuvable ou déjà annulée'; end if;
-  insert into public.score_events(player_id, round, points, reason, ref) values
-    (c.hunter_id, c.round, -3, 'capture annulée', c.id::text),
-    (c.target_id, c.round, 2, 'capture annulée', c.id::text);
+  -- On annule exactement les points donnés pour cette capture.
+  insert into public.score_events(player_id, round, points, reason, ref)
+  select s.player_id, s.round, -s.points, 'capture annulée', c.id::text
+    from public.score_events s
+   where s.ref = c.id::text and s.reason in ('capture', 'capturé');
   perform public._log('capture_annulee', jsonb_build_object('capture', c.id));
 end $$;
 
@@ -1359,7 +1398,7 @@ as $$
 begin
   perform public._require_org();
   insert into public.messages(player_id, body) values (p_player, trim(p_body));
-  perform public._push(p_player, 'message', 'Message de l''organisation', left(trim(p_body), 180),
+  perform public._push(p_player, 'message', 'Mémo du Père Noël', left(trim(p_body), 180),
     null, true, now(), now() + interval '30 minutes');
 end $$;
 
@@ -1377,10 +1416,10 @@ begin
   values (g.round, 'manuel', now(), now() + make_interval(secs => g.ping_window_seconds), p_player)
   returning id into v_ping;
   perform public._push(p_player, 'ping',
-    case when p_player is null then 'PING GÉNÉRAL : envoie ta position' else 'PING : envoie ta position' end,
+    case when p_player is null then 'Le Père Noël se rapproche !' else 'Le Père Noël t''a repéré !' end,
     case when p_player is null
-         then 'L''organisation demande la position de tous. Tu as 1 minute. Les positions seront visibles de tous.'
-         else 'L''organisation demande ta position. Tu as 1 minute.' end,
+         then 'Envoie ta position : tout le monde verra tout le monde. 1 minute.'
+         else 'Envoie ta position à l''organisation. 1 minute.' end,
     'ping-' || v_ping, true,
     now(), now() + make_interval(secs => g.ping_window_seconds), g.round, v_ping::text);
   perform public._log('ping_manuel', jsonb_build_object(

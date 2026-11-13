@@ -17,6 +17,18 @@
   const notifiedPings = new Set();
   const notifiedSpotted = new Set();
   const KIND_LABELS = { chasseur: "Ping chasseurs", general: "Ping général", manuel: "Ping demandé par l'organisation" };
+  // Texte d'un ping ouvert selon son type.
+  const pingKey = p => p.kind === "chasseur" ? "ping_chasseurs" : (p.kind === "general" || p.for_all) ? "ping_general" : "ping_orga";
+
+  const { T, line } = window.TXT;
+  // Barème de la partie (fourni par le serveur) : jamais écrit en dur dans les textes.
+  const pts = () => (state && state.game && state.game.points) || {};
+  // Accroche + consigne. `slot` : HTML inséré à la place de {mm:ss} (minuteur en direct).
+  function hookHtml(key, vars, tag, slot) {
+    const t = T(key, vars);
+    const c = esc(t.c).replace("{mm:ss}", slot || "");
+    return `<${tag || "h2"} class="hook">${esc(t.a)}</${tag || "h2"}>${t.c ? `<p class="hint">${c}</p>` : ""}`;
+  }
 
   const $ = id => document.getElementById(id);
   const setText = (id, v) => { const el = $(id); if (el) el.textContent = v; };
@@ -34,7 +46,7 @@
     showTabsBar(true);
 
     const g = s.game;
-    const key = [g.status, g.round, s.target ? s.target.pseudo + "|" + s.target.photo_path : "-"].join("#");
+    const key = [g.status, g.round, s.target ? s.target.pseudo + "|" + s.target.photo_path + "|" + s.target.motif : "-"].join("#");
     if (key !== screenKey) {
       screenKey = key;
       destroyMap();
@@ -55,12 +67,11 @@
     app.innerHTML = `
       <div class="decor">${elf(1)}${elf(2)}</div>
       <div class="card center">
-        <h1>Avis de recherche</h1>
-        <p class="muted">Entre le code personnel remis par l'organisation.</p>
-        <label for="access-code">Code d'accès</label>
+        ${hookHtml("connexion", null, "h1")}
+        <label for="access-code">${esc(T("connexion").champ)}</label>
         <input class="code" id="access-code" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" />
         <p></p>
-        <button class="primary big" id="login-btn">Entrer</button>
+        <button class="primary big" id="login-btn">${esc(T("connexion").bouton)}</button>
       </div>`;
     const input = $("access-code");
     const go = async () => {
@@ -75,7 +86,8 @@
         screenKey = "";
         await refresh();
       } catch (e) {
-        toast(e.message, "red");
+        // Problème de réseau : on affiche la vraie cause ; sinon le code est inconnu.
+        toast(/fetch|network|réseau|connexion/i.test(e.message) ? e.message : line("connexion_erreur"), "red");
         btn.disabled = false;
       }
     };
@@ -87,8 +99,7 @@
     app.innerHTML = `
       <div class="decor">${elf(1)}${elf(2)}</div>
       <div class="card">
-        <h2>En attente du départ</h2>
-        <p>Tu es inscrit. L'organisation lancera bientôt la dispersion.</p>
+        ${hookHtml("attente")}
       </div>
       <div id="push-box"></div>
       <div class="card">
@@ -96,9 +107,9 @@
         <ul>
           <li>Chaque joueur est à la fois <b>chasseur</b> et <b>cible</b>.</li>
           <li>Ta cible est en vue ? Appuie sur <b>Wanted !</b> : elle est prévenue et doit s'arrêter. Tu as alors <b>1 minute</b> pour la rejoindre et saisir son code (3 essais).</li>
-          <li>Code bon : <b>+3</b> pour toi, <b>−2</b> pour elle. Minute écoulée : elle est <b>immunisée 2 min</b> et ton bouton est <b>bloqué 2 min</b>.</li>
+          <li>Code bon : <b>+${esc(pts().capture)}</b> pour toi, <b>−${esc(pts().captured)}</b> pour elle. Minute écoulée : elle est <b>immunisée 2 min</b> et ton bouton est <b>bloqué 2 min</b>.</li>
           <li>Si tu es repéré, arrête-toi et montre ton code au chasseur.</li>
-          <li>Aux pings, tu as <b>1 minute</b> pour appuyer sur « Envoyer ma position ». Ping manqué : <b>−3</b>.</li>
+          <li>Aux pings, tu as <b>1 minute</b> pour appuyer sur « Envoyer ma position ». Ping manqué : <b>−${esc(pts().missed_ping)}</b>.</li>
           <li>Active les notifications ci-dessus, garde le son activé et coupe « Ne pas déranger » pendant la partie.</li>
         </ul>
       </div>
@@ -131,8 +142,7 @@
   function renderDispersion() {
     app.innerHTML = `
       <div class="card center">
-        <h2>${icon("run", "lg")} Dispersion</h2>
-        <p class="muted">Éloigne-toi. Ta cible sera révélée au START.</p>
+        ${hookHtml("dispersion")}
         <div class="countdown" data-until="${esc(state.game.start_at)}" data-refresh-at-zero="1">--:--</div>
         <p class="small muted">START à ${esc(fmtTime(state.game.start_at))}</p>
       </div>
@@ -187,11 +197,15 @@
       <div id="push-box"></div>
       ${t ? `
       <div class="poster">
-        <div class="wanted">WANTED</div>
-        <div class="sub">MANCHE ${esc(state.game.round)}</div>
+        <div class="wanted">${esc(T("affiche").titre)}</div>
+        <div class="sub">${esc(T("affiche").sous_titre)}</div>
         <div class="photo" id="target-photo">${t.photo_path ? "" : "Pas de photo"}</div>
         <div class="name">${esc(t.pseudo)}</div>
+        <div class="tagline">${esc(T("affiche").sous_pseudo)}</div>
+        ${window.TXT.motif(t.motif) ? `<div class="motif">${esc(T("affiche").motif + window.TXT.motif(t.motif))}</div>` : ""}
         <div class="state" id="target-state"></div>
+        <div class="reward">${esc(T("affiche", { points: pts().capture }).recompense)}</div>
+        <div class="footer">${esc(T("affiche").bas)}</div>
       </div>
       <div class="card" id="action-box"></div>` : `
       <div class="card center"><p>Aucune cible pour le moment. Patiente un instant…</p></div>`}
@@ -245,7 +259,7 @@
     if (me) {
       WG.label(WG.dot([me.lat, me.lng], { fillColor: "#5C5248", radius: 6 }).addTo(layer),
         `Ton dernier ping ${WG.ago(me.sent_at)}${me.out ? " · hors zone" : ""}`);
-      if (me.out) info.push("Attention : ta dernière position était hors du périmètre.");
+      if (me.out) { const h = T("hors_perimetre"); info.push(`${h.a} ${h.c}`); }
     }
     if ((state.public_positions || []).length) info.push("Ping général : positions des autres joueurs visibles.");
     if (state.game.status === "manche") setText("map-info", info.join(" "));
@@ -272,12 +286,12 @@
       box.className = key.startsWith("spot") ? "card alert" : "card";
       if (key.startsWith("spot")) {
         box.innerHTML = `
-          <h2>${icon("run", "lg")} Rejoins ta cible !</h2>
-          <p class="center"><span class="timer red" id="spot-left"></span> <span class="muted">pour saisir son code</span></p>
-          <label for="capture-input">Code à 4 chiffres de ta cible</label>
+          ${hookHtml("saisie_code")}
+          <p class="center"><span class="timer red" id="spot-left"></span> <span class="muted">pour saisir son matricule</span></p>
+          <label for="capture-input">Matricule de ta cible (4 chiffres)</label>
           <input class="code" id="capture-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" />
           <p class="small" id="capture-feedback"></p>
-          <button class="green big" id="capture-submit">${icon("check")} Valider la capture</button>`;
+          <button class="green big" id="capture-submit">${icon("check")} ${esc(T("saisie_code").bouton)}</button>`;
         $("capture-submit").onclick = submitCapture;
         $("capture-input").onkeydown = e => { if (e.key === "Enter") submitCapture(); };
         setTimeout(() => { const i = $("capture-input"); if (i) i.focus(); }, 50);
@@ -296,10 +310,11 @@
     const btn = $("wanted-btn");
     if (key === "lock") {
       btn.disabled = true;
-      setText("wanted-info", `Bouton bloqué encore ${fmtDuration(lockLeft)} (repérage raté).`);
+      const b = T("bouton_bloque", { "mm:ss": fmtDuration(lockLeft) });
+      setText("wanted-info", `${b.a} · ${b.c}`);
     } else if (key === "imm") {
       btn.disabled = true;
-      setText("wanted-info", `Ta cible est immunisée encore ${fmtDuration(immLeft)}.`);
+      setText("wanted-info", `Ta cible est en pause café : ${fmtDuration(immLeft)}. Personne ne peut la balancer.`);
     } else {
       btn.disabled = false;
       setText("wanted-info", "Ta cible est en vue ? Elle sera prévenue et devra s'arrêter. Tu auras 1 minute pour saisir son code.");
@@ -310,7 +325,7 @@
     const el = $("target-state");
     if (!el || !state.target) return;
     const left = msUntil(state.target.immune_until);
-    el.innerHTML = left > 0 ? `<span class="badge green">${icon("shield")} Immunisée ${fmtDuration(left)}</span>` : "";
+    el.innerHTML = left > 0 ? `<span class="badge green">${icon("shield")} Pause café ${fmtDuration(left)}</span>` : "";
   }
 
   async function spotTarget() {
@@ -350,18 +365,19 @@
       const r = await rpc("submit_capture", { p_code: code });
       if (r.ok) {
         buzz([100, 60, 100, 60, 300]);
-        toast(`${r.captured} est tombé ! +3. Nouvelle cible : ${r.new_target || "…"}`, "ok");
+        toast(line("capture_ok", { points: pts().capture }), "ok");
         screenKey = "";
         await refresh();
       } else if (r.reason === "wrong_code") {
         buzz([300]);
-        fb.innerHTML = `${icon("alert")} Code faux. Encore ${esc(r.attempts_left)} essai(s).`;
+        const w = T("code_faux", { n: r.attempts_left });
+        fb.innerHTML = `${icon("alert")} <b>${esc(w.a)}</b> · ${esc(w.c)}`;
         input.value = "";
         input.focus();
       } else {
         const msgs = {
-          failed: "3 codes faux : repérage raté. Ta cible est immunisée 2 min et ton bouton est bloqué 2 min.",
-          expired: "Minute écoulée : repérage raté. Ta cible est immunisée 2 min et ton bouton est bloqué 2 min.",
+          failed: line("reperage_rate_chasseur"),
+          expired: line("reperage_rate_chasseur"),
           no_spot: "Appuie d'abord sur Wanted !",
           target_changed: "Ta cible a changé. Regarde ta nouvelle fiche.",
           no_target: "Tu n'as pas de cible pour le moment.",
@@ -392,15 +408,14 @@
       notifiedSpotted.add(sp.id);
       buzz([700, 200, 700, 200, 700]);
       WG.beep(4);
-      toast("Tu es repéré ! Arrête-toi.", "red");
+      toast(T("cible_reperee").a, "red");
     }
     if (box.dataset.key !== String(sp.id)) {
       box.dataset.key = String(sp.id);
       box.className = "card alert spotted";
       box.innerHTML = `
-        <h2>${icon("stop", "lg")} Tu es repéré !</h2>
-        <p><b>Arrête-toi.</b> Un chasseur a <span class="timer red" id="spotted-left"></span> pour te rejoindre.</p>
-        <p class="small muted">Montre-lui ton code :</p>
+        ${hookHtml("cible_reperee", null, "h2", `<span class="timer red" id="spotted-left"></span>`)}
+        <p class="small muted">Ton code :</p>
         <div class="mycode">${esc(state.me.capture_code)}</div>`;
     }
     setText("spotted-left", fmtDuration(msUntil(sp.expires_at)));
@@ -434,14 +449,14 @@
         notifiedPings.add(open.id);
         buzz([400, 150, 400, 150, 400]);
         WG.beep(3);
-        toast(`${KIND_LABELS[open.kind]} : envoie ta position !`, "blue");
+        toast(line(pingKey(open)), "blue");
       }
       const key = "open" + open.id;
       if (box.dataset.key !== key) {
         box.dataset.key = key;
         box.className = "card ping-open";
         box.innerHTML = `
-          <h2>${icon("pin", "lg")} ${esc(KIND_LABELS[open.kind])}</h2>
+          ${hookHtml(pingKey(open))}
           <button class="blue big" id="send-pos">${icon("send")} Envoyer ma position</button>
           <p class="center"><span class="timer blue" id="ping-left"></span> <span class="small muted">pour l'envoyer</span></p>`;
         $("send-pos").onclick = () => sendPosition();
@@ -453,7 +468,12 @@
     let key, html;
     if (sentNow) {
       key = "sent" + sentNow.id;
-      html = `<p class="center"><span class="badge green">${icon("check")} Position envoyée</span></p>`;
+      html = `<div class="center"><span class="badge green">${icon("check")} ${esc(T("ping_envoye").a)}</span>
+              <p class="hint">${esc(T("ping_envoye").c)}</p></div>`;
+    } else if (next && msUntil(next.scheduled_at) <= 60000) {
+      key = "pre" + next.id;
+      html = `${hookHtml("ping_preavis", null, "h3")}
+              <p class="center"><span class="timer blue" id="ping-next"></span></p>`;
     } else if (next) {
       key = "next" + next.id;
       html = `<div class="row"><div class="grow"><span class="muted small">${icon("pin")} ${esc(KIND_LABELS[next.kind])} dans</span><br>
@@ -475,7 +495,7 @@
       const f = await WG.getFix();
       const r = await rpc("send_position", { p_lat: f.lat, p_lng: f.lng, p_accuracy: f.accuracy });
       if (r.ok) {
-        toast(r.out_of_perimeter ? `Position envoyée, mais tu es hors du périmètre (≈ ${r.distance_m} m) !` : "Position envoyée.",
+        toast(r.out_of_perimeter ? `${line("hors_perimetre")} (≈ ${r.distance_m} m)` : line("ping_envoye"),
               r.out_of_perimeter ? "red" : "ok");
       } else {
         toast(r.reason === "no_window" ? "Trop tard : la fenêtre de ping est fermée." : "Envoi refusé.", "red");
@@ -496,11 +516,10 @@
     app.innerHTML = `
       <div class="decor">${elf(1)}${elf(2)}</div>
       <div class="card center">
-        <h2>${icon("trophy", "lg")} ${final ? "Classement final" : "Regroupement"}</h2>
-        <p class="muted">${final ? "Merci d'avoir joué !" : `Fin de la manche ${esc(state.game.round)}. Rejoins le point de rendez-vous.`}</p>
+        ${hookHtml(final ? "fin_jeu" : "regroupement")}
         <p><span class="badge gold">${icon("star")} ${esc(state.me.score_total)} points</span></p>
       </div>
-      <div class="card"><ol class="board" id="board"><li class="muted">Chargement…</li></ol></div>`;
+      <div class="card"><h3 class="hook">${esc(T("classement_titre").a)}</h3><ol class="board" id="board"><li class="muted">Chargement…</li></ol></div>`;
     loadBoard();
   }
 
@@ -509,7 +528,11 @@
       const rows = await rpc("get_leaderboard");
       const el = $("board");
       if (!el) return;
-      el.innerHTML = rows.map(r => `<li>${esc(r.pseudo)} <span class="pts">${esc(r.total)} pts</span></li>`).join("") || "<li>—</li>";
+      const last = rows.length - 1;
+      el.innerHTML = rows.map((r, i) => {
+        const tag = i === 0 ? T("classement_premier").a : (i === last && last > 0 ? T("classement_dernier").a : "");
+        return `<li>${esc(r.pseudo)}${tag ? ` <span class="badge ${i === 0 ? "gold" : "plain"}">${esc(tag)}</span>` : ""} <span class="pts">${esc(r.total)} pts</span></li>`;
+      }).join("") || "<li>—</li>";
     } catch (e) { /* on réessaiera au prochain rafraîchissement */ }
   }
 
@@ -533,7 +556,8 @@
     const imm = $("immunity");
     if (imm) {
       const left = msUntil(s.me.immune_until);
-      imm.innerHTML = left > 0 ? `<span class="badge green">${icon("shield")} Immunisé ${fmtDuration(left)}</span>` : "";
+      const h = T("immunite", { "mm:ss": fmtDuration(left) });
+      imm.innerHTML = left > 0 ? `<span class="badge green">${icon("shield")} ${esc(h.a)}</span><div class="small muted">${esc(h.c)}</div>` : "";
     }
 
     const mc = $("mycode");
@@ -542,10 +566,11 @@
     const hc = $("hunters-count");
     if (hc) {
       const n = s.me.hunters || 0;
+      const z = T("chasseurs_0");
       const html = n === 0
-        ? `<span class="badge plain">${icon("shield")} Aucun chasseur à tes trousses</span>`
-        : `<span class="badge ${n >= 2 ? "red" : "plain"}">${icon("run")} ${n} chasseur${n > 1 ? "s" : ""} à tes trousses</span>`
-          + (n >= 2 ? ` <span class="small muted">Tiens jusqu'au prochain ping chasseurs : +1 bonus survivant.</span>` : "");
+        ? `<span class="badge plain">${icon("shield")} ${esc(z.a)}</span> <span class="small muted">${esc(z.c)}</span>`
+        : `<span class="badge ${n >= 2 ? "red" : "plain"}">${icon("run")} ${esc(T("chasseurs_n", { n }).a)}</span>`
+          + (n >= 2 ? ` <span class="small muted">Tiens jusqu'au prochain ping chasseurs : +${esc(pts().survivor)} bonus survivant.</span>` : "");
       if (hc.dataset.n !== String(n)) { hc.dataset.n = String(n); hc.innerHTML = html; }
     }
 
@@ -733,36 +758,48 @@
   function detectEvents(prev, next) {
     if (!prev || !prev.me || !next.me) return;
     if (prev.game.status === "manche" && next.game.status === "manche") {
+      const P = (next.game && next.game.points) || {};
       if (prev.me.capture_code !== next.me.capture_code) {
         buzz([500, 150, 500]);
-        toast("On t'a trouvé ! −2. Nouveau code et 2 min d'immunité.", "red");
+        toast(line("capture_subie", { points: P.captured }), "red");
       }
       if (prev.spotted && !next.spotted && prev.me.capture_code === next.me.capture_code) {
-        toast("Le chasseur n'a pas réussi : tu es immunisé 2 min. Tu peux repartir !", "ok");
+        toast(line("reperage_rate_cible"), "ok");
       }
       if (prev.spot && !next.spot && next.me.locked_until && !prev.me.locked_until) {
-        toast("Repérage raté : ta cible est immunisée 2 min et ton bouton est bloqué 2 min.", "red");
+        toast(line("reperage_rate_chasseur"), "red");
       }
       const h0 = prev.me.hunters || 0, h1 = next.me.hunters || 0;
       if (h1 > h0) {
         buzz([300, 120, 300]);
-        toast(h1 - h0 === 1 ? `Un chasseur de plus à tes trousses : ${h1} au total.` : `${h1 - h0} chasseurs de plus à tes trousses : ${h1} au total.`, "red");
+        toast(line("chasseurs_n", { n: h1 }), "red");
       }
+      // Cible changée sans capture de ma part : un autre chasseur l'a eue.
       const a = prev.target && prev.target.pseudo, b = next.target && next.target.pseudo;
-      if (a && b && a !== b) {
+      if (a && b && a !== b && (next.me.captures_round || 0) <= (prev.me.captures_round || 0)) {
         buzz();
-        toast(`Nouvelle cible : ${b}`);
+        toast(line("cible_prise_par_autre"));
       }
+      // Révélation d'une position à tous par l'organisation.
+      const seen = new Set((prev.public_positions || []).filter(x => x.source === "revelation").map(x => x.pseudo));
+      (next.public_positions || []).filter(x => x.source === "revelation" && !seen.has(x.pseudo))
+        .forEach(x => toast(line("revelation_orga", { pseudo: x.pseudo }), "blue"));
     }
     if (prev.game.status !== next.game.status) {
       buzz();
-      if (next.game.status === "manche") toast("START ! Ta cible est révélée.", "red");
-      if (next.game.status === "regroupement") toast("Fin de la manche !");
+      const k = { dispersion: "dispersion", manche: "start", regroupement: "fin_manche", termine: "fin_jeu" }[next.game.status];
+      if (k) toast(line(k), k === "start" ? "red" : "");
     }
+    // Points gagnés ou perdus en fin de manche : ping manqué, bonus survivant.
+    const prevMax = Math.max(0, ...((prev.me.last_scores || []).map(x => x.id)));
+    (next.me.last_scores || []).filter(x => x.id > prevMax).forEach(x => {
+      if (x.reason === "ping manqué") toast(line("ping_manque", { points: Math.abs(x.points) }), "red");
+      if (x.reason === "bonus survivant") toast(line("bonus_survivant", { points: x.points }), "ok");
+    });
     const newest = next.messages && next.messages[0];
     if (newest && lastMsgId !== null && newest.id !== lastMsgId) {
       buzz();
-      toast(`Message : ${newest.body}`, "blue");
+      toast(line("message_orga", { texte: newest.body }), "blue");
     }
   }
 
