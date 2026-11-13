@@ -276,6 +276,11 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
   r := public.send_position(46.5700, 0.3300, 20);
   insert into _report(test, ok, detail) values ('position hors zone signalée', (r->>'out_of_perimeter')::boolean, r::text);
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('ping tous : positions visibles de tous les joueurs',
+    exists (select 1 from json_array_elements(st->'public_positions') e
+             where e->>'pseudo' = (select pseudo from public.players where id = pid[1])),
+    left((st->'public_positions')::text, 150));
 
   -- Visibilité : un ping manuel n'est pas montré aux chasseurs, sauf révélation
   insert into _report(test, ok) values ('ping manuel invisible des chasseurs', public._hunter_view(pid[1], 1) is null);

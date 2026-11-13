@@ -247,7 +247,7 @@
         `Ton dernier ping ${WG.ago(me.sent_at)}${me.out ? " · hors zone" : ""}`);
       if (me.out) info.push("Attention : ta dernière position était hors du périmètre.");
     }
-    if ((state.public_positions || []).length) info.push("Ping général : positions de tous visibles.");
+    if ((state.public_positions || []).length) info.push("Ping général : positions des autres joueurs visibles.");
     if (state.game.status === "manche") setText("map-info", info.join(" "));
   }
 

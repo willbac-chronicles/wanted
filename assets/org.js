@@ -211,7 +211,7 @@
       if (a === "finish") act("org_set_status", { p_status: "termine" }, "Afficher le classement final aux joueurs ?");
       if (a === "welcome") act("org_set_status", { p_status: "accueil" });
       if (a === "reset") act("org_reset", {}, "Tout réinitialiser ? Captures, scores, cibles, pings, positions, messages, chat, déclarations de quêtes et journal seront effacés. Les joueurs, les photos et les quêtes sont conservés.");
-      if (a === "pingall") act("org_request_position", { p_player: null }, "Ping tous les joueurs ? Chacun reçoit une notification et a 1 minute pour envoyer sa position (−3 s'il ne l'envoie pas). Les positions s'affichent sur ta carte.");
+      if (a === "pingall") act("org_request_position", { p_player: null }, "Ping tous les joueurs ? Chacun reçoit une notification et a 1 minute pour envoyer sa position (−3 s'il ne l'envoie pas). Les positions reçues s'affichent sur ta carte et sur celle de tous les joueurs.");
       if (a === "purge") purge();
       if (a === "testpush") testPush();
     };

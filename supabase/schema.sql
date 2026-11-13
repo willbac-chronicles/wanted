@@ -762,15 +762,18 @@ begin
         from public.pings pg
        where v_me is not null and pg.round = g.round and g.status = 'manche'
          and (pg.player_id is null or pg.player_id = v_me)),
-    -- Positions visibles de tous : ping général le plus récent + révélations « à tous ».
+    -- Positions visibles de tous : ping général (ou « ping tous » de l'organisation) le plus récent
+    -- + révélations « à tous ».
     'public_positions', (
       select coalesce(json_agg(x), '[]'::json) from (
         select pl.pseudo, po.lat, po.lng, po.sent_at, 'general' as source
           from public.positions po
           join public.players pl on pl.id = po.player_id
          where v_me is not null and g.status = 'manche'
-           and po.ping_id = (select max(id) from public.pings
-                              where round = g.round and kind = 'general' and scheduled_at <= now())
+           and po.ping_id = (select id from public.pings
+                              where round = g.round and scheduled_at <= now()
+                                and (kind = 'general' or (kind = 'manuel' and player_id is null))
+                              order by scheduled_at desc, id desc limit 1)
         union all
         select pl.pseudo, lp.lat, lp.lng, lp.sent_at, 'revelation'
           from public.reveals r
@@ -1347,8 +1350,12 @@ begin
   insert into public.pings(round, kind, scheduled_at, window_end, player_id)
   values (g.round, 'manuel', now(), now() + make_interval(secs => g.ping_window_seconds), p_player)
   returning id into v_ping;
-  perform public._push(p_player, 'ping', 'PING : envoie ta position',
-    'L''organisation demande ta position. Tu as 1 minute.', 'ping-' || v_ping, true,
+  perform public._push(p_player, 'ping',
+    case when p_player is null then 'PING GÉNÉRAL : envoie ta position' else 'PING : envoie ta position' end,
+    case when p_player is null
+         then 'L''organisation demande la position de tous. Tu as 1 minute. Les positions seront visibles de tous.'
+         else 'L''organisation demande ta position. Tu as 1 minute.' end,
+    'ping-' || v_ping, true,
     now(), now() + make_interval(secs => g.ping_window_seconds), g.round, v_ping::text);
   perform public._log('ping_manuel', jsonb_build_object(
     'joueur', coalesce((select pseudo from public.players where id = p_player), 'tous')));
