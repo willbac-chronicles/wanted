@@ -24,11 +24,16 @@ declare
   v_err text;
   v_quest bigint;
   v_total int;
+  v_real uuid[];
 begin
   if (select status from public.games where id = 1) <> 'accueil'
      or exists (select 1 from public.assignments) then
     raise exception 'Une partie est en cours : test annulé';
   end if;
+
+  -- Les vrais joueurs sont mis à l'écart pendant le test (tirage, pings), puis réactivés à la fin.
+  select coalesce(array_agg(id), '{}') into v_real from public.players where active;
+  update public.players set active = false where id = any(v_real);
 
   -- Pas d'appel HTTP réel à la fonction d'envoi pendant le test.
   perform set_config('wanted.push_kicked', '1', true);
@@ -384,6 +389,7 @@ begin
   delete from public.players where id = any(pid);
   delete from public.devices where auth_uid = any(u) or auth_uid = u_org;
   delete from public.event_log where true;
+  update public.players set active = true where id = any(v_real);
   insert into _report(test, ok) values ('nettoyage', not exists (select 1 from public.players where pseudo like '\_\_test\_%')
     and not exists (select 1 from public.push_jobs));
 exception when others then
