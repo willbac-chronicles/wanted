@@ -251,6 +251,30 @@ create table if not exists public.chat_messages (
 );
 create index if not exists chat_messages_recent on public.chat_messages(id desc);
 
+-- v5 : messages privés (to_player / to_org), messages vocaux (media_path), photo de preuve des quêtes.
+-- Public : to_player vide et to_org faux. Privé joueur → joueur : player_id → to_player.
+-- Privé joueur → organisation : to_org vrai. Privé organisation → joueur : player_id vide, to_player rempli.
+alter table public.chat_messages add column if not exists to_player uuid references public.players(id) on delete cascade;
+alter table public.chat_messages add column if not exists to_org boolean not null default false;
+alter table public.chat_messages add column if not exists media_path text;
+alter table public.chat_messages add column if not exists media_seconds int
+  check (media_seconds is null or media_seconds between 0 and 120);
+alter table public.chat_messages drop constraint if exists chat_messages_body_check;
+alter table public.chat_messages add constraint chat_messages_body_check
+  check (length(body) <= 300 and (length(trim(body)) >= 1 or media_path is not null));
+create index if not exists chat_messages_to_player on public.chat_messages(to_player) where to_player is not null;
+alter table public.games add column if not exists dm_enabled boolean not null default true;
+alter table public.quests add column if not exists photo_required boolean not null default false;
+alter table public.quest_claims add column if not exists photo_path text;
+
+-- Dernier message lu par conversation (viewer = id du joueur ou 'org' ; conv = 'all', 'org' ou id d'un joueur).
+create table if not exists public.chat_reads (
+  viewer text not null,
+  conv text not null,
+  last_id bigint not null default 0,
+  primary key (viewer, conv)
+);
+
 -- Aucun accès direct aux tables depuis le front : tout passe par les fonctions.
 do $$
 declare t text;
@@ -259,7 +283,7 @@ begin
                            'score_events','code_attempts','messages','event_log',
                            'pings','positions','reveals','challenges',
                            'app_private_config','push_subscriptions','push_jobs',
-                           'quests','quest_claims','chat_messages'] loop
+                           'quests','quest_claims','chat_messages','chat_reads'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from public, anon, authenticated', t);
   end loop;
@@ -795,7 +819,8 @@ begin
                order by created_at desc limit 20) m),
     'chat', json_build_object(
       'enabled', g.chat_enabled,
-      'last_id', (select max(id) from public.chat_messages where v_me is not null and not deleted)),
+      'dm_enabled', g.dm_enabled,
+      'unread', case when v_me is null then '{}'::text[] else public._chat_unread(v_me, false) end),
     'quests', json_build_object(
       'todo', (select count(*) from public.quests q
                 where v_me is not null and q.active
@@ -1126,7 +1151,8 @@ begin
           join public.players t on t.id = c.target_id
          order by c.created_at desc limit 50) x),
     'chat_enabled', g.chat_enabled,
-    'chat_last_id', (select max(id) from public.chat_messages where not deleted),
+    'chat_unread', public._chat_unread(null, true),
+    'dm_enabled', g.dm_enabled,
     'claims_pending', (select count(*) from public.quest_claims where status = 'en_attente'),
     'log', (
       select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
@@ -1397,6 +1423,8 @@ begin
   delete from public.push_subscriptions where true;
   delete from public.push_jobs where true;
   delete from public.chat_messages where true;
+  delete from public.chat_reads where true;
+  update public.quest_claims set photo_path = null where photo_path is not null;
   update public.players set photo_path = null where photo_path is not null;
   perform public._log('purge', null);
   return v_paths;
@@ -1421,6 +1449,7 @@ begin
   delete from public.push_jobs where true;
   delete from public.quest_claims where true;
   delete from public.chat_messages where true;
+  delete from public.chat_reads where true;
   update public.players set capture_code = public._new_capture_code(capture_code), immune_until = null, cooldown_until = null where true;
   update public.games
      set status = 'accueil', round = 0, drawn_round = 0, round_scored = 0,
@@ -1637,8 +1666,10 @@ end $$;
 -- Quêtes
 -- ---------------------------------------------------------------------
 
+drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean);
 create or replace function public.org_save_quest(p_id bigint, p_title text, p_description text,
-                                                 p_points int, p_player uuid, p_round int, p_active boolean)
+                                                 p_points int, p_player uuid, p_round int, p_active boolean,
+                                                 p_photo_required boolean default null)
 returns bigint language plpgsql volatile security definer
 set search_path = public
 as $$
@@ -1646,15 +1677,15 @@ declare v_id bigint; v_new boolean := p_id is null;
 begin
   perform public._require_org();
   if v_new then
-    insert into public.quests(title, description, points, player_id, round, active)
+    insert into public.quests(title, description, points, player_id, round, active, photo_required)
     values (trim(p_title), coalesce(trim(p_description), ''), coalesce(p_points, 1), p_player, p_round,
-            coalesce(p_active, true))
+            coalesce(p_active, true), coalesce(p_photo_required, false))
     returning id into v_id;
   else
     update public.quests
        set title = trim(p_title), description = coalesce(trim(p_description), ''),
            points = coalesce(p_points, points), player_id = p_player, round = p_round,
-           active = coalesce(p_active, active)
+           active = coalesce(p_active, active), photo_required = coalesce(p_photo_required, photo_required)
      where id = p_id returning id into v_id;
     if v_id is null then raise exception 'Quête introuvable'; end if;
   end if;
@@ -1684,12 +1715,12 @@ begin
   perform public._require_org();
   return json_build_object(
     'quests', (select coalesce(json_agg(x order by x.id desc), '[]'::json) from (
-      select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at,
+      select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at, q.photo_required,
              (select pseudo from public.players where id = q.player_id) as for_player,
              (select count(*) from public.quest_claims c where c.quest_id = q.id and c.status = 'validee') as done
         from public.quests q) x),
     'claims', (select coalesce(json_agg(x order by x.status <> 'en_attente', x.created_at desc), '[]'::json) from (
-      select c.id, c.quest_id, q.title, q.points, p.pseudo, c.note, c.status, c.created_at, c.decided_at
+      select c.id, c.quest_id, q.title, q.points, p.pseudo, c.note, c.photo_path, c.status, c.created_at, c.decided_at
         from public.quest_claims c
         join public.quests q on q.id = c.quest_id
         join public.players p on p.id = c.player_id
@@ -1735,13 +1766,15 @@ begin
   select * into g from public.games where id = 1;
   return (select coalesce(json_agg(x order by x.done, x.id desc), '[]'::json) from (
     select q.id, q.title, q.description, q.points, q.round, (q.player_id is not null) as personal,
-           c.status, c.note, (c.status = 'validee') is true as done
+           q.photo_required, c.status, c.note, (c.photo_path is not null) as has_photo,
+           (c.status = 'validee') is true as done
       from public.quests q
       left join public.quest_claims c on c.quest_id = q.id and c.player_id = v_me
      where q.active and (q.player_id is null or q.player_id = v_me)) x);
 end $$;
 
-create or replace function public.claim_quest(p_quest bigint, p_note text default null)
+drop function if exists public.claim_quest(bigint, text);
+create or replace function public.claim_quest(p_quest bigint, p_note text default null, p_photo text default null)
 returns json language plpgsql volatile security definer
 set search_path = public
 as $$
@@ -1753,62 +1786,191 @@ begin
   if q.id is null then raise exception 'Quête indisponible'; end if;
   select * into c from public.quest_claims where quest_id = q.id and player_id = v_me;
   if c.status = 'validee' then return json_build_object('ok', true, 'already', true); end if;
-  insert into public.quest_claims(quest_id, player_id, note)
-  values (q.id, v_me, nullif(left(trim(coalesce(p_note, '')), 300), ''))
+  p_photo := nullif(trim(coalesce(p_photo, '')), '');
+  if q.photo_required and p_photo is null then raise exception 'Photo obligatoire pour cette quête'; end if;
+  if p_photo is not null and not public._media_ok(p_photo, 'quests', array['jpg']) then
+    raise exception 'Photo introuvable : réessaie';
+  end if;
+  insert into public.quest_claims(quest_id, player_id, note, photo_path)
+  values (q.id, v_me, nullif(left(trim(coalesce(p_note, '')), 300), ''), p_photo)
   on conflict (quest_id, player_id) do update
-     set note = excluded.note, status = 'en_attente', created_at = now(), decided_at = null;
+     set note = excluded.note, photo_path = excluded.photo_path,
+         status = 'en_attente', created_at = now(), decided_at = null;
   perform public._log('quete_declaree', jsonb_build_object(
     'joueur', (select pseudo from public.players where id = v_me), 'quete', q.title));
   return json_build_object('ok', true);
 end $$;
 
 -- ---------------------------------------------------------------------
--- Chat général
+-- Chat : conversation générale, messages privés, messages vocaux
 -- ---------------------------------------------------------------------
 
--- Messages après p_after (ou les 60 derniers), pour les joueurs et l'organisation.
-create or replace function public.get_chat(p_after bigint default 0)
-returns json language plpgsql stable security definer
+-- Fichier déposé par l'appelant lui-même dans le bucket « media » : <dossier>/<auth uid>/<nom>.<ext>.
+create or replace function public._media_ok(p_path text, p_folder text, p_exts text[])
+returns boolean language plpgsql stable security definer
 set search_path = public
 as $$
-declare v_me uuid := public._my_player_id(); v_org boolean := public._is_org();
 begin
-  if v_me is null and not v_org then raise exception 'Session requise'; end if;
-  return json_build_object(
-    'enabled', (select chat_enabled from public.games where id = 1),
-    'messages', (select coalesce(json_agg(x order by x.id), '[]'::json) from (
-      select m.id, m.body, m.created_at, m.deleted,
-             case when m.player_id is null then 'Organisation'
-                  else (select pseudo from public.players where id = m.player_id) end as author,
-             (m.player_id is null) as is_org,
-             (m.author_uid = auth.uid()) as mine
-        from public.chat_messages m
-       where m.id > coalesce(p_after, 0) and (not m.deleted or v_org)
-       order by m.id desc limit 60) x));
+  if p_path is null or auth.uid() is null
+     or p_path !~ ('^' || p_folder || '/' || auth.uid()::text || '/[A-Za-z0-9-]{8,64}\.('
+                   || array_to_string(p_exts, '|') || ')$') then
+    return false;
+  end if;
+  return exists (select 1 from storage.objects o where o.bucket_id = 'media' and o.name = p_path);
 end $$;
 
-create or replace function public.send_chat(p_body text)
+-- Message visible pour ce joueur (p_me) ou pour l'organisation (p_org) ?
+-- L'organisation ne lit pas les messages privés entre joueurs.
+create or replace function public._chat_visible(m public.chat_messages, p_me uuid, p_org boolean)
+returns boolean language sql immutable
+as $$
+  select (m.to_player is null and not m.to_org)
+      or (p_org and (m.to_org or (m.player_id is null and m.to_player is not null)))
+      or (p_me is not null and (m.player_id = p_me or m.to_player = p_me))
+$$;
+
+-- Conversation d'un message, vue par ce joueur ou par l'organisation :
+-- 'all' (générale), 'org' (avec l'organisation, côté joueur) ou l'id de l'autre joueur.
+create or replace function public._chat_conv(m public.chat_messages, p_me uuid, p_org boolean)
+returns text language sql immutable
+as $$
+  select case
+    when m.to_player is null and not m.to_org then 'all'
+    when p_org then coalesce(m.to_player, m.player_id)::text
+    when m.to_org or m.player_id is null then 'org'
+    when m.player_id = p_me then m.to_player::text
+    else m.player_id::text end
+$$;
+
+-- Conversations contenant des messages non lus (hors messages envoyés par soi-même).
+create or replace function public._chat_unread(p_me uuid, p_org boolean)
+returns text[] language sql stable security definer
+set search_path = public
+as $$
+  select coalesce(array_agg(x.conv), '{}') from (
+    select public._chat_conv(m, p_me, p_org) as conv, max(m.id) as last_id
+      from public.chat_messages m
+     where not m.deleted and public._chat_visible(m, p_me, p_org)
+       and not (case when p_org then m.player_id is null else m.player_id is not distinct from p_me end)
+     group by 1) x
+   where x.last_id > coalesce((select r.last_id from public.chat_reads r
+                                where r.viewer = coalesce(p_me::text, 'org') and r.conv = x.conv), 0)
+$$;
+
+-- Droit de lecture d'un fichier du bucket « media » (règle de stockage).
+create or replace function public._can_read_media(p_name text)
+returns boolean language sql stable security definer
+set search_path = public
+as $$
+  select public._has_device() and (
+       public._is_org()
+    or split_part(p_name, '/', 2) = auth.uid()::text
+    or exists (select 1 from public.chat_messages m
+                where m.media_path = p_name and not m.deleted
+                  and public._chat_visible(m, public._my_player_id(), false))
+    or exists (select 1 from public.quest_claims c
+                where c.photo_path = p_name and c.player_id = public._my_player_id()))
+$$;
+
+-- Messages d'une conversation après p_after (ou les 60 derniers) ; marque la conversation comme lue.
+drop function if exists public.get_chat(bigint);
+create or replace function public.get_chat(p_after bigint default 0, p_conv text default 'all')
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id(); v_org boolean := public._is_org(); g public.games;
+        v_conv text := coalesce(nullif(trim(p_conv), ''), 'all'); v_msgs json; v_last bigint;
+begin
+  if v_me is null and not v_org then raise exception 'Session requise'; end if;
+  select * into g from public.games where id = 1;
+  select coalesce(json_agg(x order by x.id), '[]'::json), max(x.id) into v_msgs, v_last from (
+    select m.id, m.body, m.created_at, m.deleted, m.media_path, m.media_seconds,
+           case when m.player_id is null then 'Organisation'
+                else (select pseudo from public.players where id = m.player_id) end as author,
+           (m.player_id is null) as is_org,
+           (case when v_org then m.player_id is null else m.player_id is not distinct from v_me end) as mine
+      from public.chat_messages m
+     where m.id > coalesce(p_after, 0) and (not m.deleted or v_org)
+       and public._chat_visible(m, v_me, v_org)
+       and public._chat_conv(m, v_me, v_org) = v_conv
+     order by m.id desc limit 60) x;
+  if v_last is not null then
+    insert into public.chat_reads(viewer, conv, last_id) values (coalesce(v_me::text, 'org'), v_conv, v_last)
+    on conflict (viewer, conv) do update set last_id = greatest(public.chat_reads.last_id, excluded.last_id);
+  end if;
+  return json_build_object(
+    'enabled', g.chat_enabled,
+    'dm_enabled', g.dm_enabled,
+    'conv', v_conv,
+    'messages', v_msgs,
+    'unread', public._chat_unread(v_me, v_org),
+    -- Destinataires possibles (seulement au premier chargement).
+    'contacts', case when coalesce(p_after, 0) = 0 then (
+      select coalesce(json_agg(json_build_object('key', c.k, 'name', c.n) order by c.o, lower(c.n)), '[]'::json) from (
+        select 'org' as k, 'Organisation' as n, 0 as o where not v_org
+        union all
+        select p.id::text, p.pseudo, 1 from public.players p
+         where p.active and p.id is distinct from v_me and (v_org or g.dm_enabled)) c) end);
+end $$;
+
+-- p_to : 'all' (général), 'org' (joueur → organisation) ou l'id d'un joueur (message privé).
+-- p_media : message vocal déjà déposé dans le bucket « media » (chat/<auth uid>/...).
+drop function if exists public.send_chat(text);
+create or replace function public.send_chat(p_body text, p_to text default 'all',
+                                            p_media text default null, p_seconds int default null)
 returns json language plpgsql volatile security definer
 set search_path = public
 as $$
 declare v_me uuid := public._my_player_id(); v_org boolean := public._is_org(); v_id bigint;
+        g public.games; v_to text := coalesce(nullif(trim(p_to), ''), 'all');
+        v_to_player uuid; v_to_org boolean := false;
+        v_body text := left(trim(coalesce(p_body, '')), 300); v_from text;
 begin
   if v_me is null and not v_org then raise exception 'Session requise'; end if;
-  if coalesce(trim(p_body), '') = '' then raise exception 'Message vide'; end if;
-  if not v_org and not (select chat_enabled from public.games where id = 1) then
+  select * into g from public.games where id = 1;
+  p_media := nullif(trim(coalesce(p_media, '')), '');
+  if v_body = '' and p_media is null then raise exception 'Message vide'; end if;
+  if not v_org and not (select active from public.players where id = v_me) then
+    raise exception 'Joueur désactivé';
+  end if;
+  if v_to = 'org' then
+    if v_org then raise exception 'Destinataire invalide'; end if;
+    v_to_org := true;
+  elsif v_to <> 'all' then
+    begin
+      v_to_player := v_to::uuid;
+    exception when others then
+      raise exception 'Destinataire invalide';
+    end;
+    if v_to_player is not distinct from v_me
+       or not exists (select 1 from public.players where id = v_to_player and active) then
+      raise exception 'Destinataire invalide';
+    end if;
+    if not v_org and not g.dm_enabled then
+      raise exception 'Les messages privés entre joueurs sont fermés par l''organisation';
+    end if;
+  end if;
+  if not v_org and v_to = 'all' and not g.chat_enabled then
     raise exception 'Le chat est fermé par l''organisation';
   end if;
-  if not v_org and v_me is not null
-     and not (select active from public.players where id = v_me) then
-    raise exception 'Joueur désactivé';
+  if p_media is not null and not public._media_ok(p_media, 'chat', array['webm','mp4','m4a','ogg','mp3','aac']) then
+    raise exception 'Message vocal introuvable : réessaie';
   end if;
   if exists (select 1 from public.chat_messages
               where author_uid = auth.uid() and created_at > now() - interval '3 seconds') then
     raise exception 'Doucement : un message toutes les 3 secondes';
   end if;
-  insert into public.chat_messages(player_id, author_uid, body)
-  values (case when v_org then null else v_me end, auth.uid(), left(trim(p_body), 300))
+  insert into public.chat_messages(player_id, author_uid, body, to_player, to_org, media_path, media_seconds)
+  values (case when v_org then null else v_me end, auth.uid(), v_body, v_to_player, v_to_org, p_media,
+          case when p_media is null then null else least(greatest(coalesce(p_seconds, 0), 0), 120) end)
   returning id into v_id;
+  -- Le destinataire d'un message privé est prévenu sur son téléphone.
+  if v_to_player is not null then
+    v_from := case when v_org then 'l''organisation' else (select pseudo from public.players where id = v_me) end;
+    perform public._push(v_to_player, 'chat', 'Message privé de ' || v_from,
+      case when p_media is not null then 'Message vocal' else left(v_body, 120) end,
+      'dm-' || coalesce(v_me::text, 'org'), false, now(), now() + interval '30 minutes');
+  end if;
   return json_build_object('ok', true, 'id', v_id);
 end $$;
 
@@ -1829,6 +1991,27 @@ begin
   perform public._require_org();
   update public.games set chat_enabled = p_enabled where id = 1;
   perform public._log('chat', jsonb_build_object('ouvert', p_enabled));
+end $$;
+
+-- Ouvre ou ferme les messages privés entre joueurs (les messages avec l'organisation restent possibles).
+create or replace function public.org_set_dm(p_enabled boolean)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  update public.games set dm_enabled = p_enabled where id = 1;
+  perform public._log('dm', jsonb_build_object('ouvert', p_enabled));
+end $$;
+
+-- Liste des fichiers du bucket « media » (vocaux, photos de quêtes), pour la purge.
+create or replace function public.org_media_files()
+returns text[] language plpgsql stable security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  return (select coalesce(array_agg(o.name), '{}') from storage.objects o where o.bucket_id = 'media');
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -1858,7 +2041,7 @@ begin
      where n.nspname = 'public'
        and (p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture',
-                             'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org',
+                             'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org','_can_read_media',
                              'save_push_subscription','remove_push_subscription',
                              'logout','get_quests','claim_quest','get_chat','send_chat'))
   loop
@@ -1900,6 +2083,28 @@ create policy "wanted_photos_insert" on storage.objects for insert to authentica
 drop policy if exists "wanted_photos_delete" on storage.objects;
 create policy "wanted_photos_delete" on storage.objects for delete to authenticated
   using (bucket_id = 'photos' and public._is_org());
+
+-- Messages vocaux et photos de preuve des quêtes : bucket privé « media ».
+-- Chacun dépose dans son propre dossier (<chat|quests>/<auth uid>/...) ; la lecture suit les droits du chat.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('media', 'media', false, 5242880,
+        array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/x-m4a', 'image/jpeg'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit,
+                               allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "wanted_media_read" on storage.objects;
+create policy "wanted_media_read" on storage.objects for select to authenticated
+  using (bucket_id = 'media' and public._can_read_media(name));
+
+drop policy if exists "wanted_media_insert" on storage.objects;
+create policy "wanted_media_insert" on storage.objects for insert to authenticated
+  with check (bucket_id = 'media' and public._has_device()
+              and (storage.foldername(name))[1] in ('chat', 'quests')
+              and (storage.foldername(name))[2] = auth.uid()::text);
+
+drop policy if exists "wanted_media_delete" on storage.objects;
+create policy "wanted_media_delete" on storage.objects for delete to authenticated
+  using (bucket_id = 'media' and public._is_org());
 
 -- ---------------------------------------------------------------------
 -- Partie unique + code organisateur (généré une seule fois)

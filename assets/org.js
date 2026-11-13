@@ -34,7 +34,8 @@
     quete_declaree: d => `${d.joueur} déclare la quête « ${d.quete} »`,
     quete: d => `Quête « ${d.quete} » ${d.decision} pour ${d.joueur}`,
     chat: d => `Chat ${d.ouvert ? "ouvert" : "fermé"}`,
-    purge: () => "Photos, positions et chat purgés"
+    dm: d => `Messages privés entre joueurs ${d.ouvert ? "ouverts" : "fermés"}`,
+    purge: () => "Photos, positions, chat et vocaux purgés"
   };
 
   // ---------- Connexion ----------
@@ -70,7 +71,7 @@
     if (!data) return;
     if (tab === "classement") loadScoreboard();
     if (tab === "quetes") loadQuests();
-    if (tab === "chat") chat.load(false).then(() => WC.setSeen("wanted-chat-seen-org", chat.st.lastId));
+    if (tab === "chat") { if (!chatStarted) { chatStarted = true; chat.load(true); } else chat.load(false); }
   }
 
   function setBadge(id, n, label) {
@@ -141,8 +142,8 @@
     }).join("") || `<div class="muted">Rien pour l'instant.</div>`;
 
     setBadge("badge-quetes", data.claims_pending);
-    setBadge("badge-chat", tab !== "chat" && (data.chat_last_id || 0) > WC.getSeen("wanted-chat-seen-org") ? 1 : 0, "nouveau");
-    renderChatState(data.chat_enabled);
+    setBadge("badge-chat", tab !== "chat" ? (data.chat_unread || []).length : 0, "nouveau");
+    renderChatState(data.chat_enabled, data.dm_enabled);
 
     tick();
   }
@@ -391,9 +392,10 @@
   }
 
   async function purge() {
-    if (!confirm("Purger les données ? Toutes les photos, positions, abonnements aux notifications et messages du chat seront supprimés définitivement. Les scores sont conservés.")) return;
+    if (!confirm("Purger les données ? Toutes les photos (joueurs et preuves de quêtes), positions, abonnements aux notifications, messages du chat et messages vocaux seront supprimés définitivement. Les scores sont conservés.")) return;
     if (!confirm("Confirmer la suppression définitive ?")) return;
     try {
+      const media = await rpc("org_media_files");
       const paths = await rpc("org_purge");
       const listed = await sb.storage.from("photos").list("", { limit: 1000 });
       const all = new Set([...(paths || []), ...((listed.data || []).map(o => o.name))]);
@@ -401,7 +403,11 @@
         const rm = await sb.storage.from("photos").remove([...all]);
         if (rm.error) throw rm.error;
       }
-      toast(`Purge terminée : ${all.size} photo(s), positions et chat supprimés.`, "ok");
+      for (let i = 0; i < (media || []).length; i += 100) {
+        const rmm = await sb.storage.from("media").remove(media.slice(i, i + 100));
+        if (rmm.error) throw rmm.error;
+      }
+      toast(`Purge terminée : ${all.size} photo(s), ${(media || []).length} vocal(aux) et photo(s) de quêtes, positions et chat supprimés.`, "ok");
       await refresh();
     } catch (e) { toast(e.message, "red"); }
   }
@@ -448,16 +454,20 @@
           <div class="row">
             <div class="grow"><b>${esc(c.pseudo)}</b> · ${esc(c.title)} <span class="badge gold">${esc((c.points > 0 ? "+" : "") + c.points)} pt</span>
               <span class="badge ${c.status === "validee" ? "green" : c.status === "refusee" ? "plain" : "blue"}">${esc(CLAIM_LABELS[c.status])}</span>
-              <div class="small muted">${esc(fmtTime(c.created_at))}${c.note ? ` · « ${esc(c.note)} »` : ""}</div></div>
+              <div class="small muted">${esc(fmtTime(c.created_at))}${c.note ? ` · « ${esc(c.note)} »` : ""}${c.photo_path ? "" : " · sans photo"}</div>
+              ${c.photo_path ? `<button class="proof-btn" data-proof="${esc(c.photo_path)}" aria-label="Agrandir la photo de preuve"><img class="proof" alt="Photo de preuve de ${esc(c.pseudo)}" /></button>` : ""}</div>
             ${c.status !== "validee" ? `<button class="small green" data-claim="${c.id}" data-ok="1">${icon("check")} Valider</button>` : ""}
             ${c.status !== "refusee" ? `<button class="small danger" data-claim="${c.id}" data-ok="0">Refuser</button>` : ""}
           </div>
         </div>`).join("") || `<p class="muted">Aucune déclaration pour l'instant.</p>`;
+      $("claims").querySelectorAll("button[data-proof]").forEach(async b => {
+        try { b.querySelector("img").src = await WC.mediaUrl(b.dataset.proof); } catch (e) { b.querySelector("img").alt = "Photo indisponible"; }
+      });
       $("quests").innerHTML = questData.quests.map(q => `
         <div class="quest-row" style="${q.active ? "" : "opacity:.6"}">
           <div class="row">
             <div class="grow"><b>${esc(q.title)}</b> <span class="badge gold">${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
-              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.active ? "" : " · masquée"}</span>
+              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.photo_required ? " · photo obligatoire" : ""}${q.active ? "" : " · masquée"}</span>
               ${q.description ? `<div class="small">${esc(q.description)}</div>` : ""}</div>
             <button class="small" data-q="edit" data-id="${q.id}">Modifier</button>
             <button class="small" data-q="toggle" data-id="${q.id}">${q.active ? "Masquer" : "Afficher"}</button>
@@ -469,7 +479,7 @@
 
   function resetQuestForm() {
     $("q-id").value = ""; $("q-title").value = ""; $("q-desc").value = ""; $("q-points").value = "1";
-    $("q-player").value = ""; $("q-round").value = ""; $("q-active").checked = true;
+    $("q-player").value = ""; $("q-round").value = ""; $("q-active").checked = true; $("q-photo").checked = false;
     $("quest-form-title").textContent = "Nouvelle quête";
     $("q-save").textContent = "Créer la quête";
     $("q-cancel").classList.add("hidden");
@@ -485,7 +495,8 @@
         p_points: parseInt($("q-points").value, 10) || 0,
         p_player: $("q-player").value || null,
         p_round: $("q-round").value ? Number($("q-round").value) : null,
-        p_active: $("q-active").checked
+        p_active: $("q-active").checked,
+        p_photo_required: $("q-photo").checked
       });
       toast($("q-id").value ? "Quête modifiée." : "Quête créée.", "ok");
       resetQuestForm();
@@ -502,7 +513,7 @@
     if (b.dataset.q === "edit") {
       $("q-id").value = q.id; $("q-title").value = q.title; $("q-desc").value = q.description || "";
       $("q-points").value = q.points; $("q-player").value = q.player_id || ""; $("q-round").value = q.round || "";
-      $("q-active").checked = q.active;
+      $("q-active").checked = q.active; $("q-photo").checked = !!q.photo_required;
       $("quest-form-title").textContent = "Modifier la quête";
       $("q-save").textContent = "Enregistrer";
       $("q-cancel").classList.remove("hidden");
@@ -523,6 +534,11 @@
   };
 
   $("claims").onclick = async e => {
+    const pr = e.target.closest("button[data-proof]");
+    if (pr) {
+      try { window.open(await WC.mediaUrl(pr.dataset.proof), "_blank", "noopener"); } catch (err) { toast(err.message, "red"); }
+      return;
+    }
     const b = e.target.closest("button[data-claim]");
     if (!b) return;
     try {
@@ -534,15 +550,23 @@
 
   // ---------- Chat ----------
 
-  const chat = WC.mount($("org-chat"), $("org-chat-body"), $("org-chat-send"), { isOrg: true });
-  function renderChatState(enabled) {
+  let chatStarted = false;
+  const chat = WC.mount({ list: $("org-chat"), input: $("org-chat-body"), send: $("org-chat-send"),
+                          mic: $("org-chat-mic"), conv: $("org-chat-conv"), hint: $("org-chat-hint") }, { isOrg: true });
+  function renderChatState(enabled, dm) {
     $("chat-state").innerHTML = enabled
-      ? `<span class="badge green">${icon("check")} ouvert</span>`
-      : `<span class="badge plain">${icon("lock")} fermé aux joueurs</span>`;
-    $("chat-toggle").textContent = enabled ? "Fermer le chat" : "Ouvrir le chat";
+      ? `<span class="badge green">${icon("check")} général ouvert</span>`
+      : `<span class="badge plain">${icon("lock")} général fermé</span>`;
+    $("chat-toggle").textContent = enabled ? "Fermer le chat général" : "Ouvrir le chat général";
+    $("dm-state").innerHTML = dm
+      ? `<span class="badge green">${icon("check")} privés ouverts</span>`
+      : `<span class="badge plain">${icon("lock")} privés fermés</span>`;
+    $("dm-toggle").textContent = dm ? "Fermer les messages privés" : "Ouvrir les messages privés";
   }
   $("chat-toggle").onclick = () => act("org_set_chat", { p_enabled: !data.chat_enabled },
-    data.chat_enabled ? "Fermer le chat ? Les joueurs ne pourront plus écrire (ils verront toujours les anciens messages)." : null);
+    data.chat_enabled ? "Fermer le chat général ? Les joueurs ne pourront plus y écrire (ils verront toujours les anciens messages). Ils pourront toujours t'écrire en privé." : null);
+  $("dm-toggle").onclick = () => act("org_set_dm", { p_enabled: !data.dm_enabled },
+    data.dm_enabled ? "Fermer les messages privés entre joueurs ? Ils pourront toujours écrire à l'organisation et dans le chat général." : null);
 
   // ---------- Messages, captures ----------
 

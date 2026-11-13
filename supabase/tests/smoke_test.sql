@@ -351,6 +351,16 @@ begin
   insert into _report(test, ok) values ('quête refusée ensuite : points retirés',
     (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]) = v_total);
   perform public.org_delete_quest(v_quest);
+  v_quest := public.org_save_quest(null, 'Avec photo', '', 1, null, null, true, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  begin
+    perform public.claim_quest(v_quest, 'sans photo');
+    insert into _report(test, ok) values ('quête à photo obligatoire refusée sans photo', false);
+  exception when others then
+    insert into _report(test, ok) values ('quête à photo obligatoire refusée sans photo', true);
+  end;
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_delete_quest(v_quest);
 
   -- Chat
   perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
@@ -377,6 +387,66 @@ begin
   end;
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.org_set_chat(true);
+
+  -- Messages privés (l'horloge de la transaction est figée : on vieillit les messages pour l'anti-flood)
+  update public.chat_messages set created_at = created_at - interval '10 seconds' where true;
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  r := public.send_chat('Psst, alliance ?', pid[2]::text);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('privé : non lu signalé au destinataire',
+    (st->'chat'->'unread')::jsonb ? pid[1]::text, (st->'chat')::text);
+  st := public.get_chat(0, pid[1]::text);
+  insert into _report(test, ok, detail) values ('privé : message reçu par le destinataire',
+    json_array_length(st->'messages') = 1 and st->'messages'->0->>'author' = '__test_1', left(st::text, 150));
+  insert into _report(test, ok) values ('privé : marqué lu après lecture', not ((st->'unread')::jsonb ? pid[1]::text));
+  insert into _report(test, ok) values ('privé : notification au destinataire',
+    exists (select 1 from public.push_jobs where kind = 'chat' and player_id = pid[2]));
+  perform set_config('request.jwt.claims', json_build_object('sub', u[3], 'role', 'authenticated')::text, true);
+  insert into _report(test, ok) values ('privé : invisible des autres joueurs',
+    json_array_length(public.get_chat(0, pid[1]::text)->'messages') = 0
+    and not exists (select 1 from json_array_elements(public.get_chat(0)->'messages') e where e->>'body' = 'Psst, alliance ?'));
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  insert into _report(test, ok) values ('privé : entre joueurs, invisible de l''organisation',
+    json_array_length(public.get_chat(0, pid[1]::text)->'messages') = 0
+    and json_array_length(public.get_chat(0, pid[2]::text)->'messages') = 0);
+
+  update public.chat_messages set created_at = created_at - interval '10 seconds' where true;
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  r := public.send_chat('Question pour l''orga', 'org');
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  st := public.org_get_overview();
+  insert into _report(test, ok, detail) values ('privé : message à l''organisation signalé',
+    (st->'chat_unread')::jsonb ? pid[2]::text, (st->'chat_unread')::text);
+  st := public.get_chat(0, pid[2]::text);
+  insert into _report(test, ok) values ('privé : l''organisation lit le message', json_array_length(st->'messages') = 1);
+  r := public.send_chat('Réponse de l''orga', pid[2]::text);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  st := public.get_chat(0, 'org');
+  insert into _report(test, ok, detail) values ('privé : réponse de l''organisation reçue',
+    json_array_length(st->'messages') = 2 and st->'messages'->1->>'author' = 'Organisation', left(st::text, 150));
+
+  update public.chat_messages set created_at = created_at - interval '10 seconds' where true;
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_set_dm(false);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  begin
+    perform public.send_chat('encore ?', pid[2]::text);
+    insert into _report(test, ok) values ('privés fermés : joueur → joueur refusé', false);
+  exception when others then
+    insert into _report(test, ok) values ('privés fermés : joueur → joueur refusé', true);
+  end;
+  r := public.send_chat('Toujours possible ?', 'org');
+  insert into _report(test, ok) values ('privés fermés : joueur → organisation possible', (r->>'ok')::boolean);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_set_dm(true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  begin
+    perform public.send_chat('', 'all', 'chat/' || u[2]::text || '/aaaaaaaa-bbbb-cccc.webm', 5);
+    insert into _report(test, ok) values ('vocal : fichier inexistant refusé', false);
+  exception when others then
+    insert into _report(test, ok) values ('vocal : fichier inexistant refusé', true);
+  end;
 
   -- Déconnexion d'un joueur
   perform set_config('request.jwt.claims', json_build_object('sub', u[3], 'role', 'authenticated')::text, true);

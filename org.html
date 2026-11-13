@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.7" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.9" />
 </head>
 <body>
   <div class="wrap wide">
@@ -162,13 +162,14 @@
             <div style="flex:1 1 160px"><label for="q-round">Manche</label>
               <select id="q-round"><option value="">Toutes</option><option value="1">Manche 1</option><option value="2">Manche 2</option></select></div>
             <div style="flex:0 1 160px"><label><input type="checkbox" id="q-active" checked /> Visible des joueurs</label></div>
+            <div style="flex:0 1 160px"><label><input type="checkbox" id="q-photo" /> Photo obligatoire</label></div>
           </div>
           <p></p>
           <div class="row">
             <button class="primary" id="q-save">Créer la quête</button>
             <button id="q-cancel" class="hidden">Annuler la modification</button>
           </div>
-          <p class="small muted">Les joueurs concernés reçoivent une notification à la création. Ils déclarent la quête faite ; tu valides (points ajoutés) ou refuses ci-dessous.</p>
+          <p class="small muted">Les joueurs concernés reçoivent une notification à la création. Ils déclarent la quête faite, avec une photo de preuve ; tu valides (points ajoutés) ou refuses ci-dessous.</p>
         </section>
 
         <section class="card">
@@ -186,14 +187,20 @@
       <div class="tab-panel hidden" data-panel="chat">
         <section class="card">
           <div class="row">
-            <h2 class="grow">Chat général</h2>
+            <h2 class="grow">Chat</h2>
             <span id="chat-state"></span>
             <button id="chat-toggle">Fermer le chat</button>
+            <span id="dm-state"></span>
+            <button id="dm-toggle">Fermer les messages privés</button>
           </div>
-          <p class="small muted">Visible de tous les joueurs. Tes messages apparaissent signés « Organisation ». Tu peux masquer un message.</p>
+          <p class="small muted">Choisis « Tout le monde » ou un joueur pour lui écrire en privé (il reçoit une notification). Les joueurs peuvent aussi t'écrire en privé. Les messages privés entre joueurs ne te sont pas visibles ; tu peux les fermer. Tu peux masquer un message.</p>
+          <label for="org-chat-conv">Conversation</label>
+          <select id="org-chat-conv" style="max-width:420px"></select>
+          <p class="small muted" id="org-chat-hint"></p>
           <div class="chat" id="org-chat"></div>
           <div class="row chat-input">
             <input id="org-chat-body" maxlength="300" placeholder="Écrire à tout le monde…" style="flex:1 1 auto;width:auto" />
+            <button class="mic" id="org-chat-mic"></button>
             <button class="primary" id="org-chat-send">Envoyer</button>
           </div>
         </section>
@@ -204,10 +211,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="config.js?v=0.3"></script>
-  <script src="assets/common.js?v=0.7"></script>
+  <script src="assets/common.js?v=0.9"></script>
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
-  <script src="assets/chat.js?v=0.7"></script>
-  <script src="assets/org.js?v=0.8"></script>
+  <script src="assets/chat.js?v=0.9"></script>
+  <script src="assets/org.js?v=0.9"></script>
 </body>
 </html>

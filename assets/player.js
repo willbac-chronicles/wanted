@@ -1,6 +1,6 @@
 // Écran joueur.
 (function () {
-  const { rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, STATUS_LABELS, CFG, icon, elf } = window.W;
+  const { rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, STATUS_LABELS, CFG, icon, elf, resizeImage } = window.W;
   const W = window.W, WG = window.WG, WC = window.WC;
 
   const app = document.getElementById("app");
@@ -611,17 +611,12 @@
     const q = state.quests || {}, c = state.chat || {};
     setBadge("badge-quetes", q.todo > 0 ? String(q.todo) : "");
     if (tab === "chat") {
-      chat.load(false).then(() => WC.setSeen("wanted-chat-seen", chat.st.lastId));
+      if (!chatStarted) { chatStarted = true; chat.load(true); } else chat.load(false);
       setBadge("badge-chat", "");
     } else {
-      setBadge("badge-chat", (c.last_id || 0) > WC.getSeen("wanted-chat-seen") ? "•" : "");
+      setBadge("badge-chat", (c.unread || []).length ? "•" : "");
     }
-    const off = c.enabled === false;
-    $("chat-body").disabled = off; $("chat-send").disabled = off;
-    $("chat-hint").textContent = off
-      ? "Le chat est fermé par l'organisation pour le moment."
-      : "Visible de tous les joueurs et de l'organisation. Ne donne pas ta position ni ton code !";
-    if (tab === "quetes" && (force || Date.now() - questsLoadedAt > 10000)) loadQuests();
+    if (tab === "quetes" && (force || (!claimOpen && Date.now() - questsLoadedAt > 10000))) loadQuests();
   }
 
   // ---------- Quêtes ----------
@@ -633,6 +628,8 @@
   };
   async function loadQuests() {
     questsLoadedAt = Date.now();
+    claimOpen = 0;
+    proofs.clear();
     try {
       const list = await rpc("get_quests");
       $("quest-list").innerHTML = list.map(q => `
@@ -643,27 +640,85 @@
           </div>
           ${q.description ? `<p style="margin-top:8px">${esc(q.description)}</p>` : ""}
           <p class="small muted">${q.personal ? "Quête personnelle" : "Pour tout le monde"}${q.round ? " · manche " + q.round : ""}</p>
-          ${q.status ? `<p>${QUEST_STATE[q.status]}</p>` : ""}
-          ${!q.status || q.status === "refusee" ? `<button class="green" data-quest="${q.id}">${icon("check")} J'ai réussi</button>` : ""}
+          ${q.photo_required ? `<p class="small"><span class="badge plain">${icon("camera")} Photo obligatoire</span></p>` : ""}
+          ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo ? ` <span class="badge plain">${icon("camera")} photo envoyée</span>` : ""}</p>` : ""}
+          ${!q.status || q.status === "refusee" ? `
+            <button class="green" data-quest="${q.id}">${icon("check")} J'ai réussi</button>
+            <div class="claim-form hidden" data-form="${q.id}">
+              <label for="qn-${q.id}">Un mot pour l'organisation (facultatif)</label>
+              <textarea id="qn-${q.id}" maxlength="300" rows="2" placeholder="Comment as-tu réussi ?"></textarea>
+              <label class="btn" style="margin-top:8px">${icon("camera")} ${q.photo_required ? "Prendre la photo (obligatoire)" : "Ajouter une photo (conseillé)"}
+                <input type="file" accept="image/*" capture="environment" class="hidden" data-photo="${q.id}" /></label>
+              <img class="proof hidden" alt="Aperçu de la photo" data-preview="${q.id}" />
+              <div class="row" style="margin-top:8px">
+                <button class="green" data-send="${q.id}" data-required="${q.photo_required ? 1 : 0}">${icon("send")} Envoyer la déclaration</button>
+                <button data-cancel="${q.id}">Annuler</button>
+              </div>
+            </div>` : ""}
         </div>`).join("") || `<div class="card center"><div class="decor">${elf(2)}</div><p class="muted">Aucune quête pour l'instant. Reviens plus tard !</p></div>`;
     } catch (e) { $("quest-list").innerHTML = `<p class="muted center">${esc(e.message)}</p>`; }
   }
+  // Formulaire de déclaration ouvert : on ne recharge pas la liste pour ne pas perdre la saisie.
+  let claimOpen = 0;
+  const proofs = new Map(); // id de quête → photo réduite (Blob)
+  const form = id => document.querySelector(`[data-form="${id}"]`);
   $("quest-list").onclick = async e => {
-    const b = e.target.closest("button[data-quest]");
+    const open = e.target.closest("button[data-quest]");
+    if (open) {
+      const id = open.dataset.quest;
+      open.classList.add("hidden");
+      form(id).classList.remove("hidden");
+      claimOpen = Number(id);
+      return;
+    }
+    const cancel = e.target.closest("button[data-cancel]");
+    if (cancel) {
+      const id = cancel.dataset.cancel;
+      form(id).classList.add("hidden");
+      document.querySelector(`button[data-quest="${id}"]`).classList.remove("hidden");
+      proofs.delete(Number(id));
+      claimOpen = 0;
+      return;
+    }
+    const b = e.target.closest("button[data-send]");
     if (!b) return;
-    const note = prompt("Un mot pour l'organisation (facultatif) : comment as-tu réussi ?", "");
-    if (note === null) return;
+    const id = Number(b.dataset.send);
+    const photo = proofs.get(id);
+    if (b.dataset.required === "1" && !photo) return toast("Ajoute d'abord la photo de preuve.", "red");
     b.disabled = true;
     try {
-      await rpc("claim_quest", { p_quest: Number(b.dataset.quest), p_note: note });
+      let path = null;
+      if (photo) {
+        toast("Envoi de la photo…");
+        path = await WC.uploadMedia("quests", photo, "jpg", "image/jpeg");
+      }
+      await rpc("claim_quest", { p_quest: id, p_note: $("qn-" + id).value.trim(), p_photo: path });
       toast("Quête déclarée : l'organisation va la valider.", "ok");
+      proofs.delete(id);
+      claimOpen = 0;
       await loadQuests();
     } catch (err) { toast(err.message, "red"); b.disabled = false; }
+  };
+  $("quest-list").onchange = async e => {
+    const input = e.target.closest("input[data-photo]");
+    if (!input || !input.files || !input.files[0]) return;
+    const id = Number(input.dataset.photo);
+    try {
+      const blob = await resizeImage(input.files[0], 1400);
+      proofs.set(id, blob);
+      const img = document.querySelector(`[data-preview="${id}"]`);
+      if (img.src) URL.revokeObjectURL(img.src);
+      img.src = URL.createObjectURL(blob);
+      img.classList.remove("hidden");
+    } catch (err) { toast(err.message, "red"); }
+    input.value = "";
   };
 
   // ---------- Chat ----------
 
-  const chat = WC.mount($("chat-list"), $("chat-body"), $("chat-send"), {});
+  let chatStarted = false;
+  const chat = WC.mount({ list: $("chat-list"), input: $("chat-body"), send: $("chat-send"),
+                          mic: $("chat-mic"), conv: $("chat-conv"), hint: $("chat-hint") }, {});
 
   // ---------- Déconnexion ----------
 

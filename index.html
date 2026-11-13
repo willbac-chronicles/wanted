@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.7" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.9" />
 </head>
 <body>
   <div class="wrap">
@@ -36,17 +36,20 @@
     <div id="panel-quetes" class="hidden">
       <div class="card">
         <h2>Quêtes</h2>
-        <p class="small muted">Réalise une quête, puis appuie sur « J'ai réussi ». L'organisation valide et t'ajoute les points.</p>
+        <p class="small muted">Réalise une quête, puis appuie sur « J'ai réussi » et ajoute une photo comme preuve. L'organisation valide et t'ajoute les points.</p>
       </div>
       <div id="quest-list"><p class="center muted">Chargement…</p></div>
     </div>
     <div id="panel-chat" class="hidden">
       <div class="card">
-        <h2>Chat général</h2>
-        <p class="small muted" id="chat-hint">Visible de tous les joueurs et de l'organisation. Ne donne pas ta position ni ton code !</p>
+        <h2>Chat</h2>
+        <label for="chat-conv">Conversation</label>
+        <select id="chat-conv"></select>
+        <p class="small muted" id="chat-hint"></p>
         <div class="chat" id="chat-list"></div>
         <div class="row chat-input">
           <input id="chat-body" maxlength="300" placeholder="Écrire à tout le monde…" style="flex:1 1 auto;width:auto" />
+          <button class="mic" id="chat-mic"></button>
           <button class="primary" id="chat-send">Envoyer</button>
         </div>
       </div>
@@ -62,11 +65,11 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="config.js?v=0.3"></script>
-  <script src="assets/common.js?v=0.7"></script>
+  <script src="assets/common.js?v=0.9"></script>
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(1);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/push.js?v=0.7"></script>
-  <script src="assets/chat.js?v=0.7"></script>
-  <script src="assets/player.js?v=0.8"></script>
+  <script src="assets/chat.js?v=0.9"></script>
+  <script src="assets/player.js?v=0.9"></script>
 </body>
 </html>
