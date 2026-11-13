@@ -1,7 +1,7 @@
 // Écran joueur.
 (function () {
   const { rpc, ensureSession, syncClock, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, STATUS_LABELS, CFG, icon, elf } = window.W;
-  const W = window.W, WG = window.WG;
+  const W = window.W, WG = window.WG, WC = window.WC;
 
   const app = document.getElementById("app");
   const who = document.getElementById("who");
@@ -27,8 +27,11 @@
     const s = state;
     if (!s || !s.me) { if (screenKey !== "login") renderLogin(); return; }
 
-    who.innerHTML = `${esc(s.me.pseudo)}<br><span class="small muted">${esc(STATUS_LABELS[s.game.status] || "")}${s.game.round ? " · manche " + s.game.round : ""}</span>`;
+    who.innerHTML = `${esc(s.me.pseudo)}<br><span class="small muted">${esc(STATUS_LABELS[s.game.status] || "")}${s.game.round ? " · manche " + s.game.round : ""}</span>
+      <br><button class="small link" id="logout-btn">${icon("logout")} Déconnexion</button>`;
+    $("logout-btn").onclick = logout;
     renderMessages();
+    showTabsBar(true);
 
     const g = s.game;
     const key = [g.status, g.round, s.target ? s.target.pseudo + "|" + s.target.photo_path : "-"].join("#");
@@ -46,6 +49,8 @@
   function renderLogin() {
     screenKey = "login";
     who.textContent = "";
+    showTabsBar(false);
+    showTab("jeu");
     $("messages").classList.add("hidden");
     app.innerHTML = `
       <div class="decor">${elf(1)}${elf(2)}</div>
@@ -572,6 +577,102 @@
     if (show) codeHideTimer = setTimeout(() => { if (!mc.classList.contains("hidden")) toggleCode(); }, 15000);
   }
 
+  // ---------- Onglets Jeu / Quêtes / Chat ----------
+
+  let tab = "jeu";
+  $("tab-ico-jeu").innerHTML = icon("target");
+  $("tab-ico-quetes").innerHTML = icon("flag");
+  $("tab-ico-chat").innerHTML = icon("msg");
+
+  function showTabsBar(on) {
+    $("player-tabs").classList.toggle("hidden", !on);
+    document.body.classList.toggle("has-player-tabs", on);
+  }
+  function showTab(name) {
+    tab = name;
+    document.querySelectorAll("#player-tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+    ["jeu", "quetes", "chat"].forEach(t => $("panel-" + t).classList.toggle("hidden", t !== name));
+    window.scrollTo(0, 0);
+    if (name === "jeu" && mapObj) setTimeout(() => mapObj.map.invalidateSize(), 50);
+    updateTabs(true);
+  }
+  $("player-tabs").onclick = e => { const b = e.target.closest("button[data-tab]"); if (b) showTab(b.dataset.tab); };
+
+  function setBadge(id, text) {
+    const el = $(id);
+    el.textContent = text || "";
+    el.classList.toggle("hidden", !text);
+  }
+
+  // Appelée à chaque rafraîchissement : badges, et contenu de l'onglet ouvert.
+  let questsLoadedAt = 0;
+  function updateTabs(force) {
+    if (!state || !state.me) return;
+    const q = state.quests || {}, c = state.chat || {};
+    setBadge("badge-quetes", q.todo > 0 ? String(q.todo) : "");
+    if (tab === "chat") {
+      chat.load(false).then(() => WC.setSeen("wanted-chat-seen", chat.st.lastId));
+      setBadge("badge-chat", "");
+    } else {
+      setBadge("badge-chat", (c.last_id || 0) > WC.getSeen("wanted-chat-seen") ? "•" : "");
+    }
+    const off = c.enabled === false;
+    $("chat-body").disabled = off; $("chat-send").disabled = off;
+    $("chat-hint").textContent = off
+      ? "Le chat est fermé par l'organisation pour le moment."
+      : "Visible de tous les joueurs et de l'organisation. Ne donne pas ta position ni ton code !";
+    if (tab === "quetes" && (force || Date.now() - questsLoadedAt > 10000)) loadQuests();
+  }
+
+  // ---------- Quêtes ----------
+
+  const QUEST_STATE = {
+    en_attente: `<span class="badge blue">${icon("clock")} En attente de validation</span>`,
+    validee: `<span class="badge green">${icon("check")} Validée</span>`,
+    refusee: `<span class="badge plain">${icon("alert")} Refusée : tu peux la redéclarer</span>`
+  };
+  async function loadQuests() {
+    questsLoadedAt = Date.now();
+    try {
+      const list = await rpc("get_quests");
+      $("quest-list").innerHTML = list.map(q => `
+        <div class="card quest-card${q.done ? " done" : ""}">
+          <div class="row">
+            <h3 class="grow" style="margin:0">${icon("flag")} ${esc(q.title)}</h3>
+            <span class="badge gold">${icon("star")} ${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
+          </div>
+          ${q.description ? `<p style="margin-top:8px">${esc(q.description)}</p>` : ""}
+          <p class="small muted">${q.personal ? "Quête personnelle" : "Pour tout le monde"}${q.round ? " · manche " + q.round : ""}</p>
+          ${q.status ? `<p>${QUEST_STATE[q.status]}</p>` : ""}
+          ${!q.status || q.status === "refusee" ? `<button class="green" data-quest="${q.id}">${icon("check")} J'ai réussi</button>` : ""}
+        </div>`).join("") || `<div class="card center"><div class="decor">${elf(2)}</div><p class="muted">Aucune quête pour l'instant. Reviens plus tard !</p></div>`;
+    } catch (e) { $("quest-list").innerHTML = `<p class="muted center">${esc(e.message)}</p>`; }
+  }
+  $("quest-list").onclick = async e => {
+    const b = e.target.closest("button[data-quest]");
+    if (!b) return;
+    const note = prompt("Un mot pour l'organisation (facultatif) : comment as-tu réussi ?", "");
+    if (note === null) return;
+    b.disabled = true;
+    try {
+      await rpc("claim_quest", { p_quest: Number(b.dataset.quest), p_note: note });
+      toast("Quête déclarée : l'organisation va la valider.", "ok");
+      await loadQuests();
+    } catch (err) { toast(err.message, "red"); b.disabled = false; }
+  };
+
+  // ---------- Chat ----------
+
+  const chat = WC.mount($("chat-list"), $("chat-body"), $("chat-send"), {});
+
+  // ---------- Déconnexion ----------
+
+  async function logout() {
+    if (!confirm("Te déconnecter de ce téléphone ? Tu ne recevras plus les alertes ici. Il faudra ton code d'accès pour revenir.")) return;
+    if (window.WP) await window.WP.disable();
+    W.logout();
+  }
+
   // ---------- Synchronisation ----------
 
   function detectEvents(prev, next) {
@@ -622,6 +723,7 @@
       render();
       updateMap();
       if (window.WP && next.me) window.WP.fill($("push-box"), next.me.push_devices, next.game.status === "manche");
+      updateTabs(false);
       if (next.game.status !== "manche") WG.stopWarmup();
       if (["regroupement", "termine"].includes(next.game.status) && next.me) loadBoard();
     } catch (e) {

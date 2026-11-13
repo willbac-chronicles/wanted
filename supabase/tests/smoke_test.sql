@@ -6,6 +6,10 @@
 
 create temp table if not exists _report(n serial, test text, ok boolean, detail text);
 truncate _report;
+-- Les vrais abonnements aux notifications sont mis de côté (la purge du test les efface) puis remis.
+create temp table if not exists _subs as select * from public.push_subscriptions where false;
+truncate _subs;
+insert into _subs select * from public.push_subscriptions;
 
 do $$
 declare
@@ -18,6 +22,8 @@ declare
   v_code text;
   i int;
   v_err text;
+  v_quest bigint;
+  v_total int;
 begin
   if (select status from public.games where id = 1) <> 'accueil'
      or exists (select 1 from public.assignments) then
@@ -308,6 +314,65 @@ begin
     and not exists (select 1 from public.assignments where closed_at is null),
     (select status from public.games where id = 1));
 
+  -- Import de joueurs (Nom + Pseudo), doublon ignoré
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  r := public.org_import_players('[{"nom":"Alice Martin","pseudo":"__test_imp1"},{"nom":"Bob","pseudo":"__TEST_1"},{"nom":"","pseudo":""}]'::jsonb);
+  insert into _report(test, ok, detail) values ('import : 1 créé, doublon et ligne vide ignorés',
+    json_array_length(r->'created') = 1 and json_array_length(r->'skipped') = 2
+    and (select full_name from public.players where pseudo = '__test_imp1') = 'Alice Martin', r::text);
+  delete from public.players where pseudo = '__test_imp1';
+
+  -- Quêtes : création, déclaration, validation (+points), refus (points retirés)
+  v_quest := public.org_save_quest(null, 'Photo devant la cathédrale', 'Selfie', 2, null, null, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  st := public.get_my_state();
+  insert into _report(test, ok, detail) values ('quête visible et comptée à faire',
+    (st->'quests'->>'todo')::int = 1
+    and exists (select 1 from json_array_elements(public.get_quests()) e where (e->>'id')::bigint = v_quest),
+    (st->'quests')::text);
+  r := public.claim_quest(v_quest, 'fait à 15 h');
+  v_total := (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_decide_claim((select id from public.quest_claims where quest_id = v_quest), true);
+  insert into _report(test, ok, detail) values ('quête validée : +2',
+    (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]) = v_total + 2, null);
+  perform public.org_decide_claim((select id from public.quest_claims where quest_id = v_quest), false);
+  insert into _report(test, ok) values ('quête refusée ensuite : points retirés',
+    (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]) = v_total);
+  perform public.org_delete_quest(v_quest);
+
+  -- Chat
+  perform set_config('request.jwt.claims', json_build_object('sub', u[2], 'role', 'authenticated')::text, true);
+  r := public.send_chat('Salut tout le monde');
+  begin
+    perform public.send_chat('trop vite');
+    insert into _report(test, ok) values ('chat : anti-flood 3 s', false);
+  exception when others then
+    insert into _report(test, ok) values ('chat : anti-flood 3 s', true);
+  end;
+  perform set_config('request.jwt.claims', json_build_object('sub', u[3], 'role', 'authenticated')::text, true);
+  st := public.get_chat(0);
+  insert into _report(test, ok, detail) values ('chat : message visible avec le pseudo',
+    exists (select 1 from json_array_elements(st->'messages') e
+             where e->>'author' = '__test_2' and not (e->>'mine')::boolean), left(st::text, 150));
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_set_chat(false);
+  perform set_config('request.jwt.claims', json_build_object('sub', u[3], 'role', 'authenticated')::text, true);
+  begin
+    perform public.send_chat('fermé ?');
+    insert into _report(test, ok) values ('chat fermé : envoi refusé aux joueurs', false);
+  exception when others then
+    insert into _report(test, ok) values ('chat fermé : envoi refusé aux joueurs', true);
+  end;
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_set_chat(true);
+
+  -- Déconnexion d'un joueur
+  perform set_config('request.jwt.claims', json_build_object('sub', u[3], 'role', 'authenticated')::text, true);
+  perform public.logout();
+  insert into _report(test, ok) values ('déconnexion : téléphone délié',
+    public._my_player_id() is null and not exists (select 1 from public.devices where auth_uid = u[3]));
+
   -- Purge
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.org_purge();
@@ -325,6 +390,11 @@ exception when others then
   insert into _report(test, ok, detail) values ('ERREUR : ' || sqlerrm, false, v_err);
   -- Les modifications du bloc sont annulées automatiquement en cas d'erreur.
 end $$;
+
+-- Remise des vrais abonnements aux notifications.
+insert into public.push_subscriptions overriding system value
+select * from _subs where player_id in (select id from public.players)
+on conflict do nothing;
 
 select n, test, case when ok then 'OK' else 'ÉCHEC' end as resultat, left(detail, 200) as detail
   from _report order by n;

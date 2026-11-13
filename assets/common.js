@@ -112,7 +112,10 @@
     trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4z"/><path d="M8 6H4v1a4 4 0 0 0 4 4M16 6h4v1a4 4 0 0 1-4 4M12 13v4M8 21h8M9 17h6"/>',
     msg: '<path d="M4 5h16v11H9l-5 4V5z"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>',
-    run: '<circle cx="15" cy="4.5" r="2"/><path d="M8 21l3-6 3 2v4M6 12l3-3 4 1 3 3 3 1M11 15l-1-5"/>'
+    run: '<circle cx="15" cy="4.5" r="2"/><path d="M8 21l3-6 3 2v4M6 12l3-3 4 1 3 3 3 1M11 15l-1-5"/>',
+    flag: '<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>',
+    logout: '<path d="M10 4H5v16h5"/><path d="M14 8l4 4-4 4M18 12H9"/>',
+    upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/>'
   };
   function icon(name, cls) {
     return `<svg class="ico ${cls || ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
@@ -140,6 +143,14 @@
     </svg>`;
   }
 
+  // Déconnexion : délie ce téléphone côté serveur puis ferme la session anonyme.
+  async function logout() {
+    try { await rpc("logout"); } catch (e) { /* session déjà absente */ }
+    try { await sb.auth.signOut(); } catch (e) { /* ignoré */ }
+    try { localStorage.removeItem("wanted-auth"); } catch (e) { /* ignoré */ }
+    location.reload();
+  }
+
   const STATUS_LABELS = {
     accueil: "Accueil",
     dispersion: "Dispersion",
@@ -148,5 +159,5 @@
     termine: "Jeu terminé"
   };
 
-  window.W = { CFG, sb, ensureSession, rpc, syncClock, now, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, resizeImage, randomName, STATUS_LABELS, icon, elf };
+  window.W = { CFG, sb, ensureSession, rpc, syncClock, now, msUntil, fmtDuration, fmtTime, esc, toast, buzz, photoUrl, resizeImage, randomName, STATUS_LABELS, icon, elf, logout };
 })();

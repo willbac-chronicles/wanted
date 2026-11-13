@@ -12,14 +12,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.6" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.7" />
 </head>
 <body>
   <div class="wrap wide">
     <header class="top">
       <span id="header-elf"></span>
       <div class="brand">WANTED</div>
-      <div class="who">Organisation</div>
+      <div class="who">Organisation<br><button class="small hidden" id="logout">Se déconnecter</button></div>
     </header>
 
     <section id="login" class="card hidden" style="max-width:420px;margin:0 auto">
@@ -31,77 +31,171 @@
     </section>
 
     <div id="dash" class="hidden">
-      <section class="card">
-        <div class="row">
-          <div class="grow">
-            <h2 id="g-status">—</h2>
-            <div class="muted" id="g-detail"></div>
+      <nav class="tabs" id="tabs" aria-label="Sections">
+        <button data-tab="partie" class="active">Partie</button>
+        <button data-tab="joueurs">Joueurs</button>
+        <button data-tab="classement">Classement</button>
+        <button data-tab="quetes">Quêtes <span class="tab-badge hidden" id="badge-quetes"></span></button>
+        <button data-tab="chat">Chat <span class="tab-badge hidden" id="badge-chat"></span></button>
+      </nav>
+
+      <!-- ========== Partie ========== -->
+      <div class="tab-panel" data-panel="partie">
+        <section class="card">
+          <div class="row">
+            <div class="grow">
+              <h2 id="g-status">—</h2>
+              <div class="muted" id="g-detail"></div>
+            </div>
+            <div class="timer" id="g-timer"></div>
           </div>
-          <div class="timer" id="g-timer"></div>
-        </div>
-        <p></p>
-        <div class="row">
-          <button class="primary" data-act="disp1">Dispersion manche 1</button>
-          <button class="primary" data-act="disp2">Dispersion manche 2</button>
-          <button data-act="draw">Tirer maintenant</button>
-          <button data-act="end">Fin de manche</button>
-          <button data-act="regroup">Regroupement</button>
-          <button data-act="finish">Fin du jeu</button>
-          <button data-act="welcome">Retour accueil</button>
-          <button class="danger" data-act="reset">Réinitialiser</button>
-          <button class="danger" data-act="purge">Purger les données</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="row">
-          <h2 class="grow">Carte</h2>
-          <button data-act="testpush">Tester les notifications</button>
-          <button class="blue" data-act="pingall">Demander la position à tous</button>
-        </div>
-        <div id="org-map" class="map tall"></div>
-        <p class="small muted">Bleu : position récente. Rouge + « hors zone » : hors périmètre. Gris + « ancienne » : plus de 20 min.</p>
-        <h3>Pings de la manche</h3>
-        <div class="log" id="pings"></div>
-      </section>
-
-      <section class="card">
-        <h2>Joueurs <span class="muted small" id="p-count"></span></h2>
-        <div class="row">
-          <input class="grow" id="new-pseudo" placeholder="Pseudo du nouveau joueur" maxlength="30" style="flex:1 1 200px;width:auto" />
-          <button class="primary" id="add-player">Ajouter</button>
-          <button id="export-csv">Exporter le classement</button>
-        </div>
-        <p></p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr>
-              <th>Photo</th><th>Pseudo</th><th>Accès</th><th>Code</th><th>Score</th><th>Manche</th>
-              <th>Cible</th><th>Chass.</th><th>Position</th><th>État</th><th>Actions</th>
-            </tr></thead>
-            <tbody id="players"></tbody>
-          </table>
-        </div>
-        <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden" />
-      </section>
-
-      <section class="card">
-        <h2>Message</h2>
-        <div class="row">
-          <select id="msg-to" style="flex:0 1 220px;width:auto"><option value="">Tout le monde</option></select>
-          <input id="msg-body" maxlength="500" placeholder="Texte du message" style="flex:1 1 240px;width:auto" />
-          <button class="primary" id="msg-send">Envoyer</button>
-        </div>
-      </section>
-
-      <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
-        <section class="card">
-          <h2>Captures</h2>
-          <div class="log" id="captures"></div>
+          <p></p>
+          <div class="row">
+            <button class="primary" data-act="disp1">Dispersion manche 1</button>
+            <button class="primary" data-act="disp2">Dispersion manche 2</button>
+            <button data-act="draw">Tirer maintenant</button>
+            <button data-act="end">Fin de manche</button>
+            <button data-act="regroup">Regroupement</button>
+            <button data-act="finish">Fin du jeu</button>
+            <button data-act="welcome">Retour accueil</button>
+            <button class="danger" data-act="reset">Réinitialiser</button>
+            <button class="danger" data-act="purge">Purger les données</button>
+          </div>
         </section>
+
         <section class="card">
-          <h2>Journal</h2>
-          <div class="log" id="log"></div>
+          <div class="row">
+            <h2 class="grow">Carte</h2>
+            <button data-act="testpush">Tester les notifications</button>
+            <button class="blue" data-act="pingall">Ping tous les joueurs</button>
+          </div>
+          <div id="org-map" class="map tall"></div>
+          <p class="small muted">Bleu : position récente. Rouge + « hors zone » : hors périmètre. Gris + « ancienne » : plus de 20 min.</p>
+          <h3>Pings de la manche</h3>
+          <div class="log" id="pings"></div>
+        </section>
+
+        <section class="card">
+          <h2>Message de l'organisation</h2>
+          <p class="small muted">Envoyé en notification et affiché dans l'écran Jeu des joueurs. Pour discuter avec tout le monde, utilise l'onglet Chat.</p>
+          <div class="row">
+            <select id="msg-to" style="flex:0 1 220px;width:auto"><option value="">Tout le monde</option></select>
+            <input id="msg-body" maxlength="500" placeholder="Texte du message" style="flex:1 1 240px;width:auto" />
+            <button class="primary" id="msg-send">Envoyer</button>
+          </div>
+        </section>
+
+        <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+          <section class="card">
+            <h2>Captures</h2>
+            <div class="log" id="captures"></div>
+          </section>
+          <section class="card">
+            <h2>Journal</h2>
+            <div class="log" id="log"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ========== Joueurs ========== -->
+      <div class="tab-panel hidden" data-panel="joueurs">
+        <section class="card">
+          <h2>Joueurs <span class="muted small" id="p-count"></span></h2>
+          <div class="row">
+            <input id="new-pseudo" placeholder="Pseudo du nouveau joueur" maxlength="30" style="flex:1 1 180px;width:auto" />
+            <input id="new-name" placeholder="Nom (facultatif)" maxlength="80" style="flex:1 1 180px;width:auto" />
+            <button class="primary" id="add-player">Ajouter</button>
+          </div>
+          <p></p>
+          <div class="row">
+            <button class="blue" id="import-btn">Importer un tableau Excel</button>
+            <button id="export-codes">Exporter les codes d'accès</button>
+            <input type="file" id="import-input" accept=".xlsx,.xls,.ods,.csv" class="hidden" />
+          </div>
+          <p class="small muted">Tableau Excel (.xlsx), LibreOffice (.ods) ou CSV : une colonne <b>Nom</b> et une colonne <b>Pseudo</b>, une ligne par joueur. Sans en-tête, la colonne A est le nom et la colonne B le pseudo. Les pseudos déjà pris sont ignorés.</p>
+          <div id="import-preview"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Photo</th><th>Pseudo</th><th>Nom</th><th>Accès</th><th>Code</th>
+                <th>Cible</th><th>Chass.</th><th>Position</th><th>État</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="players"></tbody>
+            </table>
+          </div>
+          <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden" />
+        </section>
+      </div>
+
+      <!-- ========== Classement ========== -->
+      <div class="tab-panel hidden" data-panel="classement">
+        <section class="card">
+          <div class="row">
+            <h2 class="grow">Classement général</h2>
+            <button id="export-csv">Exporter le classement</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Rang</th><th>Pseudo</th><th>Nom</th><th>Total</th><th>Manche 1</th><th>Manche 2</th>
+                <th>Captures</th><th>Capturé</th><th>Pings manqués</th><th>Bonus survivant</th><th>Quêtes</th><th>Corrections</th>
+              </tr></thead>
+              <tbody id="scoreboard"></tbody>
+            </table>
+          </div>
+          <p class="small muted">Captures : +3 chacune. Capturé : −2 chacune. Ping manqué : −3. Corrections : points ajoutés ou retirés à la main.</p>
+        </section>
+      </div>
+
+      <!-- ========== Quêtes ========== -->
+      <div class="tab-panel hidden" data-panel="quetes">
+        <section class="card">
+          <h2 id="quest-form-title">Nouvelle quête</h2>
+          <input type="hidden" id="q-id" />
+          <label for="q-title">Titre</label>
+          <input id="q-title" maxlength="80" placeholder="Ex. : Photo devant la cathédrale" />
+          <label for="q-desc">Description (ce que le joueur doit faire et prouver)</label>
+          <textarea id="q-desc" maxlength="1000" rows="3"></textarea>
+          <div class="row">
+            <div style="flex:0 1 120px"><label for="q-points">Points</label><input id="q-points" type="number" min="-50" max="50" value="1" /></div>
+            <div style="flex:1 1 180px"><label for="q-player">Pour</label><select id="q-player"><option value="">Tout le monde</option></select></div>
+            <div style="flex:1 1 160px"><label for="q-round">Manche</label>
+              <select id="q-round"><option value="">Toutes</option><option value="1">Manche 1</option><option value="2">Manche 2</option></select></div>
+            <div style="flex:0 1 160px"><label><input type="checkbox" id="q-active" checked /> Visible des joueurs</label></div>
+          </div>
+          <p></p>
+          <div class="row">
+            <button class="primary" id="q-save">Créer la quête</button>
+            <button id="q-cancel" class="hidden">Annuler la modification</button>
+          </div>
+          <p class="small muted">Les joueurs concernés reçoivent une notification à la création. Ils déclarent la quête faite ; tu valides (points ajoutés) ou refuses ci-dessous.</p>
+        </section>
+
+        <section class="card">
+          <h2>Déclarations à traiter <span class="muted small" id="claims-count"></span></h2>
+          <div id="claims"></div>
+        </section>
+
+        <section class="card">
+          <h2>Quêtes</h2>
+          <div id="quests"></div>
+        </section>
+      </div>
+
+      <!-- ========== Chat ========== -->
+      <div class="tab-panel hidden" data-panel="chat">
+        <section class="card">
+          <div class="row">
+            <h2 class="grow">Chat général</h2>
+            <span id="chat-state"></span>
+            <button id="chat-toggle">Fermer le chat</button>
+          </div>
+          <p class="small muted">Visible de tous les joueurs. Tes messages apparaissent signés « Organisation ». Tu peux masquer un message.</p>
+          <div class="chat" id="org-chat"></div>
+          <div class="row chat-input">
+            <input id="org-chat-body" maxlength="300" placeholder="Écrire à tout le monde…" style="flex:1 1 auto;width:auto" />
+            <button class="primary" id="org-chat-send">Envoyer</button>
+          </div>
         </section>
       </div>
     </div>
@@ -110,9 +204,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="config.js?v=0.3"></script>
-  <script src="assets/common.js?v=0.3"></script>
+  <script src="assets/common.js?v=0.7"></script>
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
-  <script src="assets/org.js?v=0.5"></script>
+  <script src="assets/chat.js?v=0.7"></script>
+  <script src="assets/org.js?v=0.7"></script>
 </body>
 </html>

@@ -44,6 +44,7 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
    - Compteur **« N chasseurs à tes trousses »** (sans leur nom), mis à jour en direct, avec alerte quand il augmente. [C]
    - **Point GPS en direct** du joueur sur la carte (dispersion et manche) : calculé sur le téléphone, jamais envoyé ; seuls les pings transmettent la position. [C]
 5. **Regroupement / fin** : classement intermédiaire, puis classement final.
+6. **Onglets** en bas de l'écran : **Jeu**, **Quêtes** (déclarer une quête réussie, validée par l'organisation), **Chat** général (fermable par l'organisation). Bouton **Déconnexion** dans l'en-tête. [C]
 
 ## 4. Écran organisateur
 
@@ -63,6 +64,8 @@ Légende : **[C]** confirmé · **[P]** proposé · **[Ouvert]** à décider
 - Corrections : ajuster les points avec un motif (sert aussi à annuler un −3 dû à une panne), annuler une capture, réattribuer une cible.
 - Vue d'ensemble : tableau des joueurs (score, cible, nombre de chasseurs, immunité, dernière position, hors périmètre) et carte des positions connues.
 - Journal horodaté de tous les événements.
+
+**Organisation de l'écran** : onglets Partie, Joueurs (import Excel Nom + Pseudo, export des codes d'accès), Classement (détail des points), Quêtes (création, validation des déclarations), Chat (modération, ouverture/fermeture). Bouton Déconnexion. [C]
 
 **Après le jeu**
 - Export du classement.

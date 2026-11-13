@@ -143,5 +143,15 @@
     };
   }
 
-  window.WP = { fill, enable, status, isIOS, isStandalone, supported, esc };
+  // À la déconnexion : ce téléphone ne doit plus recevoir les alertes de ce joueur.
+  async function disable() {
+    try {
+      const sub = await currentSub();
+      if (!sub) return;
+      try { await rpc("remove_push_subscription", { p_endpoint: sub.endpoint }); } catch (e) { /* ignoré */ }
+      await sub.unsubscribe();
+    } catch (e) { /* ignoré */ }
+  }
+
+  window.WP = { fill, enable, disable, status, isIOS, isStandalone, supported, esc };
 })();

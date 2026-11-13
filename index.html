@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=0.6" />
+  <link rel="stylesheet" href="assets/styles.css?v=0.7" />
 </head>
 <body>
   <div class="wrap">
@@ -26,20 +26,47 @@
       <div class="brand">WANTED</div>
       <div class="who" id="who"></div>
     </header>
-    <main id="app"><p class="center muted">Chargement…</p></main>
-    <section id="messages" class="card info hidden">
-      <h3>Messages de l'organisation</h3>
-      <ul class="msgs" id="msg-list"></ul>
-    </section>
+    <div id="panel-jeu">
+      <main id="app"><p class="center muted">Chargement…</p></main>
+      <section id="messages" class="card info hidden">
+        <h3>Messages de l'organisation</h3>
+        <ul class="msgs" id="msg-list"></ul>
+      </section>
+    </div>
+    <div id="panel-quetes" class="hidden">
+      <div class="card">
+        <h2>Quêtes</h2>
+        <p class="small muted">Réalise une quête, puis appuie sur « J'ai réussi ». L'organisation valide et t'ajoute les points.</p>
+      </div>
+      <div id="quest-list"><p class="center muted">Chargement…</p></div>
+    </div>
+    <div id="panel-chat" class="hidden">
+      <div class="card">
+        <h2>Chat général</h2>
+        <p class="small muted" id="chat-hint">Visible de tous les joueurs et de l'organisation. Ne donne pas ta position ni ton code !</p>
+        <div class="chat" id="chat-list"></div>
+        <div class="row chat-input">
+          <input id="chat-body" maxlength="300" placeholder="Écrire à tout le monde…" style="flex:1 1 auto;width:auto" />
+          <button class="primary" id="chat-send">Envoyer</button>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <nav class="player-tabs hidden" id="player-tabs" aria-label="Sections">
+    <button data-tab="jeu" class="active"><span id="tab-ico-jeu"></span>Jeu</button>
+    <button data-tab="quetes"><span id="tab-ico-quetes"></span>Quêtes<span class="tab-badge hidden" id="badge-quetes"></span></button>
+    <button data-tab="chat"><span id="tab-ico-chat"></span>Chat<span class="tab-badge hidden" id="badge-chat"></span></button>
+  </nav>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="config.js?v=0.3"></script>
-  <script src="assets/common.js?v=0.3"></script>
+  <script src="assets/common.js?v=0.7"></script>
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(1);</script>
   <script src="assets/geo.js?v=0.6"></script>
-  <script src="assets/push.js?v=0.5"></script>
-  <script src="assets/player.js?v=0.6"></script>
+  <script src="assets/push.js?v=0.7"></script>
+  <script src="assets/chat.js?v=0.7"></script>
+  <script src="assets/player.js?v=0.7"></script>
 </body>
 </html>

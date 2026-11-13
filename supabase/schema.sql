@@ -211,6 +211,46 @@ create table if not exists public.push_jobs (
 );
 create index if not exists push_jobs_due on public.push_jobs(send_at) where status in ('attente','envoi');
 
+-- v4 : nom réel, quêtes, chat
+alter table public.players add column if not exists full_name text
+  check (full_name is null or length(full_name) <= 80);
+alter table public.games add column if not exists chat_enabled boolean not null default true;
+
+-- Quêtes : player_id vide = pour tout le monde ; round vide = valable quelle que soit la manche.
+create table if not exists public.quests (
+  id bigint generated always as identity primary key,
+  title text not null check (length(trim(title)) between 1 and 80),
+  description text not null default '' check (length(description) <= 1000),
+  points int not null default 1 check (points between -50 and 50),
+  player_id uuid references public.players(id) on delete cascade,
+  round int check (round is null or round between 1 and 2),
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Le joueur déclare une quête faite ; l'organisation valide (points) ou refuse.
+create table if not exists public.quest_claims (
+  id bigint generated always as identity primary key,
+  quest_id bigint not null references public.quests(id) on delete cascade,
+  player_id uuid not null references public.players(id) on delete cascade,
+  note text check (note is null or length(note) <= 300),
+  status text not null default 'en_attente' check (status in ('en_attente','validee','refusee')),
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,
+  unique (quest_id, player_id)
+);
+
+-- Chat général : player_id vide = message de l'organisation.
+create table if not exists public.chat_messages (
+  id bigint generated always as identity primary key,
+  player_id uuid references public.players(id) on delete cascade,
+  author_uid uuid not null,
+  body text not null check (length(trim(body)) between 1 and 300),
+  deleted boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists chat_messages_recent on public.chat_messages(id desc);
+
 -- Aucun accès direct aux tables depuis le front : tout passe par les fonctions.
 do $$
 declare t text;
@@ -218,7 +258,8 @@ begin
   foreach t in array array['games','players','devices','assignments','captures',
                            'score_events','code_attempts','messages','event_log',
                            'pings','positions','reveals','challenges',
-                           'app_private_config','push_subscriptions','push_jobs'] loop
+                           'app_private_config','push_subscriptions','push_jobs',
+                           'quests','quest_claims','chat_messages'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from public, anon, authenticated', t);
   end loop;
@@ -748,7 +789,19 @@ begin
         from (select id, body, created_at, (player_id is not null) as private
                 from public.messages
                where v_me is not null and (player_id is null or player_id = v_me)
-               order by created_at desc limit 20) m)
+               order by created_at desc limit 20) m),
+    'chat', json_build_object(
+      'enabled', g.chat_enabled,
+      'last_id', (select max(id) from public.chat_messages where v_me is not null and not deleted)),
+    'quests', json_build_object(
+      'todo', (select count(*) from public.quests q
+                where v_me is not null and q.active
+                  and (q.player_id is null or q.player_id = v_me)
+                  and (q.round is null or q.round = g.round)
+                  and not exists (select 1 from public.quest_claims c
+                                   where c.quest_id = q.id and c.player_id = v_me and c.status <> 'refusee')),
+      'last_id', (select max(q.id) from public.quests q
+                   where v_me is not null and q.active and (q.player_id is null or q.player_id = v_me)))
   );
 end $$;
 
@@ -1033,7 +1086,7 @@ begin
       'dispersion_minutes', g.dispersion_minutes, 'round_minutes', g.round_minutes),
     'players', (
       select coalesce(json_agg(x order by x.pseudo), '[]'::json) from (
-        select p.id, p.pseudo, p.access_code, p.photo_path, p.capture_code, p.immune_until, p.active,
+        select p.id, p.pseudo, p.full_name, p.access_code, p.photo_path, p.capture_code, p.immune_until, p.active,
                exists (select 1 from public.devices d where d.player_id = p.id) as linked,
                (select count(*) from public.push_subscriptions s where s.player_id = p.id) as push_devices,
                (select coalesce(sum(points), 0) from public.score_events s where s.player_id = p.id) as score_total,
@@ -1069,6 +1122,9 @@ begin
           join public.players h on h.id = c.hunter_id
           join public.players t on t.id = c.target_id
          order by c.created_at desc limit 50) x),
+    'chat_enabled', g.chat_enabled,
+    'chat_last_id', (select max(id) from public.chat_messages where not deleted),
+    'claims_pending', (select count(*) from public.quest_claims where status = 'en_attente'),
     'log', (
       select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
         select kind, detail, created_at from public.event_log
@@ -1333,6 +1389,7 @@ begin
   delete from public.reveals where true;
   delete from public.push_subscriptions where true;
   delete from public.push_jobs where true;
+  delete from public.chat_messages where true;
   update public.players set photo_path = null where photo_path is not null;
   perform public._log('purge', null);
   return v_paths;
@@ -1355,6 +1412,8 @@ begin
   delete from public.messages where true;
   delete from public.event_log where true;
   delete from public.push_jobs where true;
+  delete from public.quest_claims where true;
+  delete from public.chat_messages where true;
   update public.players set capture_code = public._new_capture_code(capture_code), immune_until = null, cooldown_until = null where true;
   update public.games
      set status = 'accueil', round = 0, drawn_round = 0, round_scored = 0,
@@ -1473,6 +1532,299 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- Déconnexion
+-- ---------------------------------------------------------------------
+
+-- Délie ce téléphone du joueur ou de l'organisation (le code d'accès reste valable).
+create or replace function public.logout()
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+declare d public.devices;
+begin
+  select * into d from public.devices where auth_uid = auth.uid();
+  if d.auth_uid is null then return; end if;
+  delete from public.devices where auth_uid = auth.uid();
+  perform public._log('deconnexion', jsonb_build_object(
+    'joueur', coalesce((select pseudo from public.players where id = d.player_id), 'organisation')));
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Import des joueurs (tableau Excel : Nom + Pseudo)
+-- ---------------------------------------------------------------------
+
+-- p_rows = [{"nom": "...", "pseudo": "..."}, ...]. Les pseudos déjà pris sont ignorés.
+create or replace function public.org_import_players(p_rows jsonb)
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare
+  r jsonb;
+  v_pseudo text; v_nom text;
+  v public.players;
+  v_created jsonb := '[]'::jsonb;
+  v_skipped jsonb := '[]'::jsonb;
+begin
+  perform public._require_org();
+  if jsonb_typeof(p_rows) <> 'array' then raise exception 'Liste de joueurs attendue'; end if;
+  if jsonb_array_length(p_rows) > 300 then raise exception '300 joueurs au maximum par import'; end if;
+  for r in select * from jsonb_array_elements(p_rows) loop
+    v_pseudo := left(trim(coalesce(r->>'pseudo', '')), 30);
+    v_nom := nullif(left(trim(coalesce(r->>'nom', '')), 80), '');
+    if v_pseudo = '' then
+      v_skipped := v_skipped || jsonb_build_object('pseudo', '', 'nom', v_nom, 'motif', 'pseudo vide');
+      continue;
+    end if;
+    if exists (select 1 from public.players where lower(pseudo) = lower(v_pseudo)) then
+      v_skipped := v_skipped || jsonb_build_object('pseudo', v_pseudo, 'nom', v_nom, 'motif', 'pseudo déjà pris');
+      continue;
+    end if;
+    insert into public.players(pseudo, full_name, access_code, capture_code)
+    values (v_pseudo, v_nom, public._new_access_code(), public._new_capture_code())
+    returning * into v;
+    v_created := v_created || jsonb_build_object('pseudo', v.pseudo, 'nom', v.full_name, 'access_code', v.access_code);
+  end loop;
+  perform public._log('import_joueurs', jsonb_build_object(
+    'crees', jsonb_array_length(v_created), 'ignores', jsonb_array_length(v_skipped)));
+  return json_build_object('created', v_created, 'skipped', v_skipped);
+end $$;
+
+create or replace function public.org_set_full_name(p_id uuid, p_name text)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  update public.players set full_name = nullif(left(trim(coalesce(p_name, '')), 80), '') where id = p_id;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Classement détaillé (organisation)
+-- ---------------------------------------------------------------------
+
+create or replace function public.org_get_scoreboard()
+returns json language plpgsql stable security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  return (
+    select coalesce(json_agg(x order by x.total desc, x.pseudo), '[]'::json) from (
+      select p.id, p.pseudo, p.full_name, p.active,
+             coalesce(sum(s.points), 0) as total,
+             coalesce(sum(s.points) filter (where s.round = 1), 0) as round1,
+             coalesce(sum(s.points) filter (where s.round = 2), 0) as round2,
+             (select count(*) from public.captures c where c.hunter_id = p.id and not c.cancelled) as captures,
+             (select count(*) from public.captures c where c.target_id = p.id and not c.cancelled) as captured,
+             count(*) filter (where s.reason = 'ping manqué') as missed_pings,
+             coalesce(sum(s.points) filter (where s.reason = 'bonus survivant'), 0) as bonus,
+             coalesce(sum(s.points) filter (where s.reason = 'quête'), 0) as quests,
+             coalesce(sum(s.points) filter (where s.reason not in
+               ('capture','capturé','ping manqué','bonus survivant','quête')), 0) as corrections
+        from public.players p
+        left join public.score_events s on s.player_id = p.id
+       group by p.id, p.pseudo, p.full_name, p.active) x);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Quêtes
+-- ---------------------------------------------------------------------
+
+create or replace function public.org_save_quest(p_id bigint, p_title text, p_description text,
+                                                 p_points int, p_player uuid, p_round int, p_active boolean)
+returns bigint language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_id bigint; v_new boolean := p_id is null;
+begin
+  perform public._require_org();
+  if v_new then
+    insert into public.quests(title, description, points, player_id, round, active)
+    values (trim(p_title), coalesce(trim(p_description), ''), coalesce(p_points, 1), p_player, p_round,
+            coalesce(p_active, true))
+    returning id into v_id;
+  else
+    update public.quests
+       set title = trim(p_title), description = coalesce(trim(p_description), ''),
+           points = coalesce(p_points, points), player_id = p_player, round = p_round,
+           active = coalesce(p_active, active)
+     where id = p_id returning id into v_id;
+    if v_id is null then raise exception 'Quête introuvable'; end if;
+  end if;
+  if v_new and coalesce(p_active, true) then
+    perform public._push(p_player, 'quete', 'Nouvelle quête : ' || left(trim(p_title), 60),
+      'Ouvre l''onglet Quêtes de Wanted.', 'quete-' || v_id, false, now(), now() + interval '30 minutes');
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.org_delete_quest(p_id bigint)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  delete from public.score_events
+   where reason = 'quête' and ref in (select id::text from public.quest_claims where quest_id = p_id);
+  delete from public.quests where id = p_id;
+end $$;
+
+create or replace function public.org_get_quests()
+returns json language plpgsql stable security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  return json_build_object(
+    'quests', (select coalesce(json_agg(x order by x.id desc), '[]'::json) from (
+      select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at,
+             (select pseudo from public.players where id = q.player_id) as for_player,
+             (select count(*) from public.quest_claims c where c.quest_id = q.id and c.status = 'validee') as done
+        from public.quests q) x),
+    'claims', (select coalesce(json_agg(x order by x.status <> 'en_attente', x.created_at desc), '[]'::json) from (
+      select c.id, c.quest_id, q.title, q.points, p.pseudo, c.note, c.status, c.created_at, c.decided_at
+        from public.quest_claims c
+        join public.quests q on q.id = c.quest_id
+        join public.players p on p.id = c.player_id
+       order by c.created_at desc limit 200) x));
+end $$;
+
+-- Valide (points ajoutés) ou refuse une déclaration ; peut revenir sur sa décision.
+create or replace function public.org_decide_claim(p_claim bigint, p_accept boolean)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+declare c public.quest_claims; q public.quests; g public.games;
+begin
+  perform public._require_org();
+  select * into c from public.quest_claims where id = p_claim for update;
+  if c.id is null then raise exception 'Déclaration introuvable'; end if;
+  select * into q from public.quests where id = c.quest_id;
+  select * into g from public.games where id = 1;
+  delete from public.score_events where reason = 'quête' and ref = c.id::text;
+  update public.quest_claims set status = case when p_accept then 'validee' else 'refusee' end, decided_at = now()
+   where id = c.id;
+  if p_accept then
+    insert into public.score_events(player_id, round, points, reason, ref)
+    values (c.player_id, coalesce(q.round, g.round), q.points, 'quête', c.id::text);
+  end if;
+  perform public._push(c.player_id, 'quete',
+    case when p_accept then 'Quête validée : ' else 'Quête refusée : ' end || left(q.title, 60),
+    case when p_accept then (case when q.points >= 0 then '+' else '' end) || q.points || ' point(s).'
+         else 'Vois l''onglet Quêtes.' end,
+    'quete-' || q.id, false, now(), now() + interval '30 minutes');
+  perform public._log('quete', jsonb_build_object('joueur', (select pseudo from public.players where id = c.player_id),
+    'quete', q.title, 'decision', case when p_accept then 'validée' else 'refusée' end));
+end $$;
+
+-- Quêtes visibles par le joueur, avec l'état de sa déclaration.
+create or replace function public.get_quests()
+returns json language plpgsql stable security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id(); g public.games;
+begin
+  if v_me is null then raise exception 'Joueur non connecté'; end if;
+  select * into g from public.games where id = 1;
+  return (select coalesce(json_agg(x order by x.done, x.id desc), '[]'::json) from (
+    select q.id, q.title, q.description, q.points, q.round, (q.player_id is not null) as personal,
+           c.status, c.note, (c.status = 'validee') is true as done
+      from public.quests q
+      left join public.quest_claims c on c.quest_id = q.id and c.player_id = v_me
+     where q.active and (q.player_id is null or q.player_id = v_me)) x);
+end $$;
+
+create or replace function public.claim_quest(p_quest bigint, p_note text default null)
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id(); q public.quests; c public.quest_claims;
+begin
+  if v_me is null then raise exception 'Joueur non connecté'; end if;
+  select * into q from public.quests
+   where id = p_quest and active and (player_id is null or player_id = v_me);
+  if q.id is null then raise exception 'Quête indisponible'; end if;
+  select * into c from public.quest_claims where quest_id = q.id and player_id = v_me;
+  if c.status = 'validee' then return json_build_object('ok', true, 'already', true); end if;
+  insert into public.quest_claims(quest_id, player_id, note)
+  values (q.id, v_me, nullif(left(trim(coalesce(p_note, '')), 300), ''))
+  on conflict (quest_id, player_id) do update
+     set note = excluded.note, status = 'en_attente', created_at = now(), decided_at = null;
+  perform public._log('quete_declaree', jsonb_build_object(
+    'joueur', (select pseudo from public.players where id = v_me), 'quete', q.title));
+  return json_build_object('ok', true);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Chat général
+-- ---------------------------------------------------------------------
+
+-- Messages après p_after (ou les 60 derniers), pour les joueurs et l'organisation.
+create or replace function public.get_chat(p_after bigint default 0)
+returns json language plpgsql stable security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id(); v_org boolean := public._is_org();
+begin
+  if v_me is null and not v_org then raise exception 'Session requise'; end if;
+  return json_build_object(
+    'enabled', (select chat_enabled from public.games where id = 1),
+    'messages', (select coalesce(json_agg(x order by x.id), '[]'::json) from (
+      select m.id, m.body, m.created_at, m.deleted,
+             case when m.player_id is null then 'Organisation'
+                  else (select pseudo from public.players where id = m.player_id) end as author,
+             (m.player_id is null) as is_org,
+             (m.author_uid = auth.uid()) as mine
+        from public.chat_messages m
+       where m.id > coalesce(p_after, 0) and (not m.deleted or v_org)
+       order by m.id desc limit 60) x));
+end $$;
+
+create or replace function public.send_chat(p_body text)
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare v_me uuid := public._my_player_id(); v_org boolean := public._is_org(); v_id bigint;
+begin
+  if v_me is null and not v_org then raise exception 'Session requise'; end if;
+  if coalesce(trim(p_body), '') = '' then raise exception 'Message vide'; end if;
+  if not v_org and not (select chat_enabled from public.games where id = 1) then
+    raise exception 'Le chat est fermé par l''organisation';
+  end if;
+  if not v_org and v_me is not null
+     and not (select active from public.players where id = v_me) then
+    raise exception 'Joueur désactivé';
+  end if;
+  if exists (select 1 from public.chat_messages
+              where author_uid = auth.uid() and created_at > now() - interval '3 seconds') then
+    raise exception 'Doucement : un message toutes les 3 secondes';
+  end if;
+  insert into public.chat_messages(player_id, author_uid, body)
+  values (case when v_org then null else v_me end, auth.uid(), left(trim(p_body), 300))
+  returning id into v_id;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+create or replace function public.org_delete_chat(p_id bigint)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  update public.chat_messages set deleted = true where id = p_id;
+end $$;
+
+create or replace function public.org_set_chat(p_enabled boolean)
+returns void language plpgsql volatile security definer
+set search_path = public
+as $$
+begin
+  perform public._require_org();
+  update public.games set chat_enabled = p_enabled where id = 1;
+  perform public._log('chat', jsonb_build_object('ouvert', p_enabled));
+end $$;
+
+-- ---------------------------------------------------------------------
 -- Droits d'exécution
 -- ---------------------------------------------------------------------
 
@@ -1488,7 +1840,7 @@ begin
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture','get_leaderboard',
                              'send_position','get_perimeter','spot_target','save_push_subscription',
                              'remove_push_subscription','claim_push_jobs','finish_push_job',
-                             'drop_push_subscription'))
+                             'drop_push_subscription','logout','get_quests','claim_quest','get_chat','send_chat'))
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
@@ -1500,7 +1852,8 @@ begin
        and (p.proname like 'org\_%'
             or p.proname in ('claim_player','claim_organizer','get_my_state','submit_capture',
                              'get_leaderboard','send_position','get_perimeter','spot_target','_has_device','_is_org',
-                             'save_push_subscription','remove_push_subscription'))
+                             'save_push_subscription','remove_push_subscription',
+                             'logout','get_quests','claim_quest','get_chat','send_chat'))
   loop
     execute format('grant execute on function %s to authenticated', f.sig);
   end loop;
