@@ -443,6 +443,7 @@
 
   let questData = { quests: [], claims: [] };
   const CLAIM_LABELS = { en_attente: "à traiter", validee: "validée", refusee: "refusée" };
+  const DIFF_LABELS = { facile: "Facile", moderee: "Modérée", difficile: "Difficile" };
 
   async function loadQuests() {
     try {
@@ -467,6 +468,7 @@
         <div class="quest-row" style="${q.active ? "" : "opacity:.6"}">
           <div class="row">
             <div class="grow"><b>${esc(q.title)}</b> <span class="badge gold">${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
+              <span class="badge plain">${esc(DIFF_LABELS[q.difficulty] || "Facile")}</span>
               <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.photo_required ? " · photo obligatoire" : ""}${q.active ? "" : " · masquée"}</span>
               ${q.description ? `<div class="small">${esc(q.description)}</div>` : ""}</div>
             <button class="small" data-q="edit" data-id="${q.id}">Modifier</button>
@@ -480,6 +482,7 @@
   function resetQuestForm() {
     $("q-id").value = ""; $("q-title").value = ""; $("q-desc").value = ""; $("q-points").value = "1";
     $("q-player").value = ""; $("q-round").value = ""; $("q-active").checked = true; $("q-photo").checked = false;
+    $("q-difficulty").value = "facile";
     $("quest-form-title").textContent = "Nouvelle quête";
     $("q-save").textContent = "Créer la quête";
     $("q-cancel").classList.add("hidden");
@@ -496,7 +499,8 @@
         p_player: $("q-player").value || null,
         p_round: $("q-round").value ? Number($("q-round").value) : null,
         p_active: $("q-active").checked,
-        p_photo_required: $("q-photo").checked
+        p_photo_required: $("q-photo").checked,
+        p_difficulty: $("q-difficulty").value
       });
       toast($("q-id").value ? "Quête modifiée." : "Quête créée.", "ok");
       resetQuestForm();
@@ -514,6 +518,7 @@
       $("q-id").value = q.id; $("q-title").value = q.title; $("q-desc").value = q.description || "";
       $("q-points").value = q.points; $("q-player").value = q.player_id || ""; $("q-round").value = q.round || "";
       $("q-active").checked = q.active; $("q-photo").checked = !!q.photo_required;
+      $("q-difficulty").value = q.difficulty || "facile";
       $("quest-form-title").textContent = "Modifier la quête";
       $("q-save").textContent = "Enregistrer";
       $("q-cancel").classList.remove("hidden");

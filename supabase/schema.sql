@@ -271,6 +271,9 @@ create index if not exists chat_messages_to_player on public.chat_messages(to_pl
 alter table public.games add column if not exists dm_enabled boolean not null default true;
 alter table public.quests add column if not exists photo_required boolean not null default false;
 alter table public.quest_claims add column if not exists photo_path text;
+-- v7 : difficulté des quêtes (sous-onglets côté joueur).
+alter table public.quests add column if not exists difficulty text not null default 'facile'
+  check (difficulty in ('facile', 'moderee', 'difficile'));
 
 -- Dernier message lu par conversation (viewer = id du joueur ou 'org' ; conv = 'all', 'org' ou id d'un joueur).
 create table if not exists public.chat_reads (
@@ -1706,25 +1709,31 @@ end $$;
 -- ---------------------------------------------------------------------
 
 drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean);
+drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean, boolean);
 create or replace function public.org_save_quest(p_id bigint, p_title text, p_description text,
                                                  p_points int, p_player uuid, p_round int, p_active boolean,
-                                                 p_photo_required boolean default null)
+                                                 p_photo_required boolean default null,
+                                                 p_difficulty text default null)
 returns bigint language plpgsql volatile security definer
 set search_path = public
 as $$
 declare v_id bigint; v_new boolean := p_id is null;
 begin
   perform public._require_org();
+  if p_difficulty is not null and p_difficulty not in ('facile', 'moderee', 'difficile') then
+    raise exception 'Difficulté invalide';
+  end if;
   if v_new then
-    insert into public.quests(title, description, points, player_id, round, active, photo_required)
+    insert into public.quests(title, description, points, player_id, round, active, photo_required, difficulty)
     values (trim(p_title), coalesce(trim(p_description), ''), coalesce(p_points, 1), p_player, p_round,
-            coalesce(p_active, true), coalesce(p_photo_required, false))
+            coalesce(p_active, true), coalesce(p_photo_required, false), coalesce(p_difficulty, 'facile'))
     returning id into v_id;
   else
     update public.quests
        set title = trim(p_title), description = coalesce(trim(p_description), ''),
            points = coalesce(p_points, points), player_id = p_player, round = p_round,
-           active = coalesce(p_active, active), photo_required = coalesce(p_photo_required, photo_required)
+           active = coalesce(p_active, active), photo_required = coalesce(p_photo_required, photo_required),
+           difficulty = coalesce(p_difficulty, difficulty)
      where id = p_id returning id into v_id;
     if v_id is null then raise exception 'Quête introuvable'; end if;
   end if;
@@ -1755,6 +1764,7 @@ begin
   return json_build_object(
     'quests', (select coalesce(json_agg(x order by x.id desc), '[]'::json) from (
       select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at, q.photo_required,
+             q.difficulty,
              (select pseudo from public.players where id = q.player_id) as for_player,
              (select count(*) from public.quest_claims c where c.quest_id = q.id and c.status = 'validee') as done
         from public.quests q) x),
@@ -1805,7 +1815,7 @@ begin
   select * into g from public.games where id = 1;
   return (select coalesce(json_agg(x order by x.done, x.id desc), '[]'::json) from (
     select q.id, q.title, q.description, q.points, q.round, (q.player_id is not null) as personal,
-           q.photo_required, c.status, c.note, (c.photo_path is not null) as has_photo,
+           q.photo_required, q.difficulty, c.status, c.note, (c.photo_path is not null) as has_photo,
            (c.status = 'validee') is true as done
       from public.quests q
       left join public.quest_claims c on c.quest_id = q.id and c.player_id = v_me

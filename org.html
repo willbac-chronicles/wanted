@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=1.0" />
+  <link rel="stylesheet" href="assets/styles.css?v=1.1" />
 </head>
 <body>
   <div class="wrap wide">
@@ -161,6 +161,8 @@
             <div style="flex:1 1 180px"><label for="q-player">Pour</label><select id="q-player"><option value="">Tout le monde</option></select></div>
             <div style="flex:1 1 160px"><label for="q-round">Manche</label>
               <select id="q-round"><option value="">Toutes</option><option value="1">Manche 1</option><option value="2">Manche 2</option></select></div>
+            <div style="flex:1 1 160px"><label for="q-difficulty">Difficulté</label>
+              <select id="q-difficulty"><option value="facile">Facile</option><option value="moderee">Modérée</option><option value="difficile">Difficile</option></select></div>
             <div style="flex:0 1 160px"><label><input type="checkbox" id="q-active" checked /> Visible des joueurs</label></div>
             <div style="flex:0 1 160px"><label><input type="checkbox" id="q-photo" /> Photo obligatoire</label></div>
           </div>
@@ -215,6 +217,6 @@
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=0.9"></script>
+  <script src="assets/org.js?v=1.1"></script>
 </body>
 </html>

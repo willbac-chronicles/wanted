@@ -362,7 +362,9 @@ begin
   insert into _report(test, ok) values ('quête refusée ensuite : points retirés',
     (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]) = v_total);
   perform public.org_delete_quest(v_quest);
-  v_quest := public.org_save_quest(null, 'Avec photo', '', 1, null, null, true, true);
+  v_quest := public.org_save_quest(null, 'Avec photo', '', 1, null, null, true, true, 'difficile');
+  insert into _report(test, ok) values ('quête : difficulté enregistrée',
+    (select difficulty from public.quests where id = v_quest) = 'difficile');
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
   begin
     perform public.claim_quest(v_quest, 'sans photo');

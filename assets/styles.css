@@ -302,3 +302,7 @@ h1.hook, h2.hook { font-family: var(--font-poster); font-weight: 400; color: var
   border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
 }
 .poster .footer { margin-top: 10px; font-size: 13px; font-style: italic; color: var(--ink-2); }
+
+/* Sous-onglets des quêtes (difficulté) */
+.subtabs { position: static; border-bottom: 0; padding: 0; background: transparent; }
+.subtabs button { flex: 1 1 0; justify-content: center; }

@@ -651,12 +651,44 @@
     validee: `<span class="badge green">${icon("check")} Validée</span>`,
     refusee: `<span class="badge plain">${icon("alert")} Refusée : tu peux la redéclarer</span>`
   };
+  // Sous-onglets par difficulté (le dernier choisi est mémorisé sur ce téléphone).
+  const DIFFS = ["facile", "moderee", "difficile"];
+  const DIFF_EMPTY = { facile: "Aucune quête facile pour l'instant.", moderee: "Aucune quête modérée pour l'instant.", difficile: "Aucune quête difficile pour l'instant." };
+  let questDiff = "facile";
+  try { const d = localStorage.getItem("wanted-quest-diff"); if (DIFFS.includes(d)) questDiff = d; } catch (e) { /* ignoré */ }
+  let questList = null;
+  const diffOf = q => (DIFFS.includes(q.difficulty) ? q.difficulty : "facile");
+  const todo = q => !q.status || q.status === "refusee";
+
+  $("quest-tabs").onclick = e => {
+    const b = e.target.closest("button[data-diff]");
+    if (!b || b.dataset.diff === questDiff) return;
+    questDiff = b.dataset.diff;
+    try { localStorage.setItem("wanted-quest-diff", questDiff); } catch (err) { /* ignoré */ }
+    claimOpen = 0;
+    drawQuests();
+  };
+
   async function loadQuests() {
     questsLoadedAt = Date.now();
     claimOpen = 0;
     proofs.clear();
     try {
-      const list = await rpc("get_quests");
+      questList = await rpc("get_quests");
+      drawQuests();
+    } catch (e) { $("quest-list").innerHTML = `<p class="muted center">${esc(e.message)}</p>`; }
+  }
+
+  function drawQuests() {
+    if (!questList) return;
+    // Pastille : quêtes encore à faire dans chaque difficulté.
+    DIFFS.forEach(d => {
+      const n = questList.filter(q => diffOf(q) === d && todo(q)).length;
+      setBadge("qd-" + d, n ? String(n) : "");
+    });
+    document.querySelectorAll("#quest-tabs button").forEach(b => b.classList.toggle("active", b.dataset.diff === questDiff));
+    const list = questList.filter(q => diffOf(q) === questDiff);
+    {
       $("quest-list").innerHTML = list.map(q => `
         <div class="card quest-card${q.done ? " done" : ""}">
           <div class="row">
@@ -680,8 +712,8 @@
                 <button data-cancel="${q.id}">Annuler</button>
               </div>
             </div>` : ""}
-        </div>`).join("") || `<div class="card center"><div class="decor">${elf(2)}</div><p class="muted">Aucune quête pour l'instant. Reviens plus tard !</p></div>`;
-    } catch (e) { $("quest-list").innerHTML = `<p class="muted center">${esc(e.message)}</p>`; }
+        </div>`).join("") || `<div class="card center"><div class="decor">${elf(2)}</div><p class="muted">${esc(questList.length ? DIFF_EMPTY[questDiff] : "Aucune quête pour l'instant. Reviens plus tard !")}</p></div>`;
+    }
   }
   // Formulaire de déclaration ouvert : on ne recharge pas la liste pour ne pas perdre la saisie.
   let claimOpen = 0;
