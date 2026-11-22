@@ -698,7 +698,8 @@
           ${q.description ? `<p style="margin-top:8px">${esc(q.description)}</p>` : ""}
           <p class="small muted">${q.personal ? "Quête personnelle" : "Pour tout le monde"}${q.round ? " · manche " + q.round : ""}</p>
           ${q.photo_required ? `<p class="small"><span class="badge plain">${icon("camera")} Photo obligatoire</span></p>` : ""}
-          ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo ? ` <span class="badge plain">${icon("camera")} photo envoyée</span>` : ""}</p>` : ""}
+          ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo && q.status !== "refusee" ? ` <span class="badge plain">${icon("camera")} photo envoyée</span>` : ""}</p>` : ""}
+          ${q.status === "refusee" && q.reason ? `<p class="small quest-reason"><b>Motif :</b> ${esc(q.reason)}</p>` : ""}
           ${!q.status || q.status === "refusee" ? `
             <button class="green" data-quest="${q.id}">${icon("check")} J'ai réussi</button>
             <div class="claim-form hidden" data-form="${q.id}">
@@ -828,6 +829,17 @@
       if (x.reason === "ping manqué") toast(line("ping_manque", { points: Math.abs(x.points) }), "red");
       if (x.reason === "bonus survivant") toast(line("bonus_survivant", { points: x.points }), "ok");
     });
+    // Décision de l'organisation sur une quête déclarée.
+    const key = d => `${d.id}:${d.status}:${d.decided_at}`;
+    const known = new Set(((prev.quests && prev.quests.decisions) || []).map(key));
+    const fresh = ((next.quests && next.quests.decisions) || []).filter(d => !known.has(key(d)));
+    fresh.forEach(d => {
+      buzz();
+      if (d.status === "validee") toast(line("quete_validee", { points: (d.points >= 0 ? "+" : "") + d.points, titre: d.title }), "ok");
+      else toast(line(d.reason ? "quete_refusee_motif" : "quete_refusee", { titre: d.title, motif: d.reason }), "red");
+    });
+    if (fresh.length && tab === "quetes" && !claimOpen) loadQuests();
+    else if (fresh.length) questsLoadedAt = 0;
     const newest = next.messages && next.messages[0];
     if (newest && lastMsgId !== null && newest.id !== lastMsgId) {
       buzz();

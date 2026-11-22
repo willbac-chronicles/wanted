@@ -271,6 +271,9 @@ create index if not exists chat_messages_to_player on public.chat_messages(to_pl
 alter table public.games add column if not exists dm_enabled boolean not null default true;
 alter table public.quests add column if not exists photo_required boolean not null default false;
 alter table public.quest_claims add column if not exists photo_path text;
+-- v8 : message de refus d'une déclaration de quête.
+alter table public.quest_claims add column if not exists refusal_reason text
+  check (refusal_reason is null or length(refusal_reason) <= 300);
 -- v7 : difficulté des quêtes (sous-onglets côté joueur).
 alter table public.quests add column if not exists difficulty text not null default 'facile'
   check (difficulty in ('facile', 'moderee', 'difficile'));
@@ -869,7 +872,12 @@ begin
                   and not exists (select 1 from public.quest_claims c
                                    where c.quest_id = q.id and c.player_id = v_me and c.status <> 'refusee')),
       'last_id', (select max(q.id) from public.quests q
-                   where v_me is not null and q.active and (q.player_id is null or q.player_id = v_me)))
+                   where v_me is not null and q.active and (q.player_id is null or q.player_id = v_me)),
+      'decisions', (select coalesce(json_agg(d order by d.decided_at desc), '[]'::json) from (
+                      select c.id, c.status, q.title, q.points, c.refusal_reason as reason, c.decided_at
+                        from public.quest_claims c join public.quests q on q.id = c.quest_id
+                       where v_me is not null and c.player_id = v_me and c.decided_at is not null
+                       order by c.decided_at desc limit 10) d))
   );
 end $$;
 
@@ -1769,7 +1777,8 @@ begin
              (select count(*) from public.quest_claims c where c.quest_id = q.id and c.status = 'validee') as done
         from public.quests q) x),
     'claims', (select coalesce(json_agg(x order by x.status <> 'en_attente', x.created_at desc), '[]'::json) from (
-      select c.id, c.quest_id, q.title, q.points, p.pseudo, c.note, c.photo_path, c.status, c.created_at, c.decided_at
+      select c.id, c.quest_id, q.title, q.points, p.pseudo, c.note, c.photo_path, c.status, c.created_at, c.decided_at,
+             c.refusal_reason
         from public.quest_claims c
         join public.quests q on q.id = c.quest_id
         join public.players p on p.id = c.player_id
@@ -1777,11 +1786,13 @@ begin
 end $$;
 
 -- Valide (points ajoutés) ou refuse une déclaration ; peut revenir sur sa décision.
-create or replace function public.org_decide_claim(p_claim bigint, p_accept boolean)
+drop function if exists public.org_decide_claim(bigint, boolean);
+create or replace function public.org_decide_claim(p_claim bigint, p_accept boolean, p_reason text default null)
 returns void language plpgsql volatile security definer
 set search_path = public
 as $$
 declare c public.quest_claims; q public.quests; g public.games;
+        v_reason text := case when p_accept then null else nullif(left(trim(coalesce(p_reason, '')), 300), '') end;
 begin
   perform public._require_org();
   select * into c from public.quest_claims where id = p_claim for update;
@@ -1789,7 +1800,8 @@ begin
   select * into q from public.quests where id = c.quest_id;
   select * into g from public.games where id = 1;
   delete from public.score_events where reason = 'quête' and ref = c.id::text;
-  update public.quest_claims set status = case when p_accept then 'validee' else 'refusee' end, decided_at = now()
+  update public.quest_claims set status = case when p_accept then 'validee' else 'refusee' end, decided_at = now(),
+         refusal_reason = v_reason
    where id = c.id;
   if p_accept then
     insert into public.score_events(player_id, round, points, reason, ref)
@@ -1798,10 +1810,10 @@ begin
   perform public._push(c.player_id, 'quete',
     case when p_accept then 'Quête validée : ' else 'Quête refusée : ' end || left(q.title, 60),
     case when p_accept then (case when q.points >= 0 then '+' else '' end) || q.points || ' point(s).'
-         else 'Vois l''onglet Quêtes.' end,
+         else coalesce('Motif : ' || left(v_reason, 120) || E'\n', '') || 'Tu peux la redéclarer dans l''onglet Quêtes.' end,
     'quete-' || q.id, false, now(), now() + interval '30 minutes');
   perform public._log('quete', jsonb_build_object('joueur', (select pseudo from public.players where id = c.player_id),
-    'quete', q.title, 'decision', case when p_accept then 'validée' else 'refusée' end));
+    'quete', q.title, 'decision', case when p_accept then 'validée' else 'refusée' end, 'motif', v_reason));
 end $$;
 
 -- Quêtes visibles par le joueur, avec l'état de sa déclaration.
@@ -1816,6 +1828,7 @@ begin
   return (select coalesce(json_agg(x order by x.done, x.id desc), '[]'::json) from (
     select q.id, q.title, q.description, q.points, q.round, (q.player_id is not null) as personal,
            q.photo_required, q.difficulty, c.status, c.note, (c.photo_path is not null) as has_photo,
+           case when c.status = 'refusee' then c.refusal_reason end as reason,
            (c.status = 'validee') is true as done
       from public.quests q
       left join public.quest_claims c on c.quest_id = q.id and c.player_id = v_me
@@ -1844,7 +1857,7 @@ begin
   values (q.id, v_me, nullif(left(trim(coalesce(p_note, '')), 300), ''), p_photo)
   on conflict (quest_id, player_id) do update
      set note = excluded.note, photo_path = excluded.photo_path,
-         status = 'en_attente', created_at = now(), decided_at = null;
+         status = 'en_attente', created_at = now(), decided_at = null, refusal_reason = null;
   perform public._log('quete_declaree', jsonb_build_object(
     'joueur', (select pseudo from public.players where id = v_me), 'quete', q.title));
   return json_build_object('ok', true);

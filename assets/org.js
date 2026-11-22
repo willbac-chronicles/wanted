@@ -32,7 +32,7 @@
     revelation: d => `Position de ${d.joueur} révélée (${d.portee})`,
     score_manche: d => `Pénalités de ping et bonus survivant calculés (manche ${d.manche})`,
     quete_declaree: d => `${d.joueur} déclare la quête « ${d.quete} »`,
-    quete: d => `Quête « ${d.quete} » ${d.decision} pour ${d.joueur}`,
+    quete: d => `Quête « ${d.quete} » ${d.decision} pour ${d.joueur}${d.motif ? ` (motif : ${d.motif})` : ""}`,
     chat: d => `Chat ${d.ouvert ? "ouvert" : "fermé"}`,
     dm: d => `Messages privés entre joueurs ${d.ouvert ? "ouverts" : "fermés"}`,
     purge: () => "Photos, positions, chat et vocaux purgés"
@@ -70,7 +70,7 @@
   function loadTab() {
     if (!data) return;
     if (tab === "classement") loadScoreboard();
-    if (tab === "quetes") loadQuests();
+    if (tab === "quetes" && !refusing) loadQuests();
     if (tab === "chat") { if (!chatStarted) { chatStarted = true; chat.load(true); } else chat.load(false); }
   }
 
@@ -445,22 +445,49 @@
   const CLAIM_LABELS = { en_attente: "à traiter", validee: "validée", refusee: "refusée" };
   const DIFF_LABELS = { facile: "Facile", moderee: "Modérée", difficile: "Difficile" };
 
-  async function loadQuests() {
-    try {
-      questData = await rpc("org_get_quests");
-      const pending = questData.claims.filter(c => c.status === "en_attente");
-      $("claims-count").textContent = `(${pending.length} à traiter)`;
-      $("claims").innerHTML = questData.claims.map(c => `
+  // Formulaire de refus ouvert : pas de rechargement automatique, pour ne pas perdre le motif saisi.
+  let refusing = 0;
+  let doneOpen = false; // section « Déjà traitées » dépliée
+
+  function claimHtml(c) {
+    return `
         <div class="claim ${c.status}">
           <div class="row">
             <div class="grow"><b>${esc(c.pseudo)}</b> · ${esc(c.title)} <span class="badge gold">${esc((c.points > 0 ? "+" : "") + c.points)} pt</span>
               <span class="badge ${c.status === "validee" ? "green" : c.status === "refusee" ? "plain" : "blue"}">${esc(CLAIM_LABELS[c.status])}</span>
-              <div class="small muted">${esc(fmtTime(c.created_at))}${c.note ? ` · « ${esc(c.note)} »` : ""}${c.photo_path ? "" : " · sans photo"}</div>
+              <div class="small muted">Déclarée ${esc(fmtTime(c.created_at))}${c.decided_at ? ` · traitée ${esc(fmtTime(c.decided_at))}` : ""}${c.note ? ` · « ${esc(c.note)} »` : ""}${c.photo_path ? "" : " · sans photo"}</div>
+              ${c.status === "refusee" && c.refusal_reason ? `<div class="small">Motif du refus : ${esc(c.refusal_reason)}</div>` : ""}
               ${c.photo_path ? `<button class="proof-btn" data-proof="${esc(c.photo_path)}" aria-label="Agrandir la photo de preuve"><img class="proof" alt="Photo de preuve de ${esc(c.pseudo)}" /></button>` : ""}</div>
             ${c.status !== "validee" ? `<button class="small green" data-claim="${c.id}" data-ok="1">${icon("check")} Valider</button>` : ""}
-            ${c.status !== "refusee" ? `<button class="small danger" data-claim="${c.id}" data-ok="0">Refuser</button>` : ""}
+            ${c.status !== "refusee" ? `<button class="small danger" data-refuse="${c.id}">Refuser</button>` : ""}
           </div>
-        </div>`).join("") || `<p class="muted">Aucune déclaration pour l'instant.</p>`;
+          <div class="claim-form hidden" data-refuse-form="${c.id}">
+            <label for="rr-${c.id}">Message au joueur (facultatif)</label>
+            <input id="rr-${c.id}" maxlength="300" placeholder="Ex. : la photo ne montre pas la cathédrale" />
+            <div class="row" style="margin-top:8px">
+              <button class="small danger" data-claim="${c.id}" data-ok="0">Confirmer le refus</button>
+              <button class="small" data-refuse-cancel="${c.id}">Annuler</button>
+            </div>
+          </div>
+        </div>`;
+  }
+
+  async function loadQuests() {
+    try {
+      questData = await rpc("org_get_quests");
+      refusing = 0;
+      const pending = questData.claims.filter(c => c.status === "en_attente");
+      const done = questData.claims.filter(c => c.status !== "en_attente");
+      $("claims-count").textContent = `(${pending.length})`;
+      $("claims").innerHTML = (pending.map(claimHtml).join("") || `<p class="muted">Rien à traiter pour l'instant.</p>`)
+        + (done.length ? `
+        <details class="claims-done"${doneOpen ? " open" : ""}>
+          <summary>Déjà traitées (${done.length})</summary>
+          <p class="small muted">Tu peux revenir sur une décision : les points sont corrigés et le joueur est prévenu.</p>
+          ${done.map(claimHtml).join("")}
+        </details>` : "");
+      const det = $("claims").querySelector("details");
+      if (det) det.ontoggle = () => { doneOpen = det.open; };
       $("claims").querySelectorAll("button[data-proof]").forEach(async b => {
         try { b.querySelector("img").src = await WC.mediaUrl(b.dataset.proof); } catch (e) { b.querySelector("img").alt = "Photo indisponible"; }
       });
@@ -544,13 +571,34 @@
       try { window.open(await WC.mediaUrl(pr.dataset.proof), "_blank", "noopener"); } catch (err) { toast(err.message, "red"); }
       return;
     }
+    const rf = e.target.closest("button[data-refuse]");
+    if (rf) {
+      const form = $("claims").querySelector(`[data-refuse-form="${rf.dataset.refuse}"]`);
+      form.classList.remove("hidden");
+      rf.classList.add("hidden");
+      refusing++;
+      form.querySelector("input").focus();
+      return;
+    }
+    const rc = e.target.closest("button[data-refuse-cancel]");
+    if (rc) {
+      $("claims").querySelector(`[data-refuse-form="${rc.dataset.refuseCancel}"]`).classList.add("hidden");
+      $("claims").querySelector(`button[data-refuse="${rc.dataset.refuseCancel}"]`).classList.remove("hidden");
+      refusing = Math.max(0, refusing - 1);
+      return;
+    }
     const b = e.target.closest("button[data-claim]");
     if (!b) return;
+    const accept = b.dataset.ok === "1";
+    const reason = accept ? null : (($("rr-" + b.dataset.claim) || {}).value || "").trim() || null;
+    b.disabled = true;
     try {
-      await rpc("org_decide_claim", { p_claim: Number(b.dataset.claim), p_accept: b.dataset.ok === "1" });
+      await rpc("org_decide_claim", { p_claim: Number(b.dataset.claim), p_accept: accept, p_reason: reason });
+      toast(accept ? "Quête validée : le joueur est prévenu." : "Quête refusée : le joueur est prévenu et peut la redéclarer.", accept ? "ok" : "");
+      refusing = 0;
       await loadQuests();
       await refresh();
-    } catch (err) { toast(err.message, "red"); }
+    } catch (err) { b.disabled = false; toast(err.message, "red"); }
   };
 
   // ---------- Chat ----------

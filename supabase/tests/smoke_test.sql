@@ -361,6 +361,21 @@ begin
   perform public.org_decide_claim((select id from public.quest_claims where quest_id = v_quest), false);
   insert into _report(test, ok) values ('quête refusée ensuite : points retirés',
     (select coalesce(sum(points), 0) from public.score_events where player_id = pid[1]) = v_total);
+  perform public.org_decide_claim((select id from public.quest_claims where quest_id = v_quest), false, '  Photo floue  ');
+  insert into _report(test, ok) values ('refus : motif enregistré',
+    (select refusal_reason from public.quest_claims where quest_id = v_quest) = 'Photo floue');
+  insert into _report(test, ok) values ('refus : notification avec le motif',
+    exists (select 1 from public.push_jobs where player_id = pid[1] and body like 'Motif : Photo floue%'));
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  insert into _report(test, ok) values ('refus : motif visible du joueur',
+    exists (select 1 from json_array_elements(public.get_quests()) e
+             where (e->>'id')::bigint = v_quest and e->>'status' = 'refusee' and e->>'reason' = 'Photo floue')
+    and exists (select 1 from json_array_elements(public.get_my_state()->'quests'->'decisions') d
+                 where d->>'status' = 'refusee' and d->>'reason' = 'Photo floue'));
+  r := public.claim_quest(v_quest, 'refait');
+  insert into _report(test, ok) values ('refus : quête redéclarable, motif effacé',
+    (select status = 'en_attente' and refusal_reason is null from public.quest_claims where quest_id = v_quest));
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
   perform public.org_delete_quest(v_quest);
   v_quest := public.org_save_quest(null, 'Avec photo', '', 1, null, null, true, true, 'difficile');
   insert into _report(test, ok) values ('quête : difficulté enregistrée',
