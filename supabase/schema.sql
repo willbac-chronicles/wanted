@@ -1775,11 +1775,11 @@ end $$;
 -- Lignes : title, description, points, difficulty, photo_required, player (pseudo ou vide), round, active.
 -- Titre déjà présent (sans tenir compte des majuscules) : mis à jour si p_update, sinon ignoré.
 -- Une seule notification aux joueurs pour l'ensemble des nouvelles quêtes (pas une par quête).
--- p_sync : le tableau fait foi. Les quêtes dont le titre n'est ni dans le tableau ni dans p_keep
+-- p_sync (par défaut, y compris pour une page organisateur restée ouverte sur une ancienne version) : le tableau fait foi. Les quêtes dont le titre n'est ni dans le tableau ni dans p_keep
 -- (lignes du tableau écartées par l'aperçu) sont supprimées, avec les points qu'elles avaient rapportés.
 drop function if exists public.org_import_quests(jsonb, boolean);
 create or replace function public.org_import_quests(p_rows jsonb, p_update boolean default false,
-                                                    p_sync boolean default false, p_keep jsonb default '[]'::jsonb)
+                                                    p_sync boolean default true, p_keep jsonb default '[]'::jsonb)
 returns json language plpgsql volatile security definer
 set search_path = public
 as $$
