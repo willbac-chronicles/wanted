@@ -1771,6 +1771,109 @@ begin
   return v_id;
 end $$;
 
+-- Import de quêtes depuis un tableau (Google Sheet, Excel, CSV), en un seul appel.
+-- Lignes : title, description, points, difficulty, photo_required, player (pseudo ou vide), round, active.
+-- Titre déjà présent (sans tenir compte des majuscules) : mis à jour si p_update, sinon ignoré.
+-- Une seule notification aux joueurs pour l'ensemble des nouvelles quêtes (pas une par quête).
+create or replace function public.org_import_quests(p_rows jsonb, p_update boolean default false)
+returns json language plpgsql volatile security definer
+set search_path = public
+as $$
+declare
+  r jsonb; v_line int := 0;
+  v_title text; v_desc text; v_points int; v_diff text; v_photo boolean; v_round int; v_active boolean;
+  v_pseudo text; v_player uuid; v_id bigint; v_existing bigint;
+  v_created int := 0; v_updated int := 0;
+  v_skipped jsonb := '[]'::jsonb;
+  v_new_all int := 0;
+  v_new_personal uuid[] := '{}';
+  v_titles text[] := '{}';
+begin
+  perform public._require_org();
+  if jsonb_typeof(p_rows) <> 'array' then raise exception 'Liste de quêtes attendue'; end if;
+  if jsonb_array_length(p_rows) > 300 then raise exception '300 quêtes au maximum par import'; end if;
+  for r in select * from jsonb_array_elements(p_rows) loop
+    v_line := v_line + 1;
+    v_title := left(trim(coalesce(r->>'title', '')), 80);
+    if v_title = '' then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', '', 'motif', 'titre vide');
+      continue;
+    end if;
+    if lower(v_title) = any(v_titles) then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'titre en double dans le tableau');
+      continue;
+    end if;
+    v_titles := v_titles || lower(v_title);
+    v_desc := left(trim(coalesce(r->>'description', '')), 1000);
+    begin
+      v_points := coalesce(nullif(trim(coalesce(r->>'points', '')), '')::int, 1);
+    exception when others then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'points illisibles');
+      continue;
+    end;
+    if v_points not between -50 and 50 then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'points hors de −50 à 50');
+      continue;
+    end if;
+    v_diff := coalesce(nullif(r->>'difficulty', ''), 'facile');
+    if v_diff not in ('facile', 'moderee', 'difficile') then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'difficulté inconnue');
+      continue;
+    end if;
+    v_round := nullif(r->>'round', '')::int;
+    if v_round is not null and v_round not in (1, 2) then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'manche inconnue');
+      continue;
+    end if;
+    v_photo := coalesce((r->>'photo_required')::boolean, false);
+    v_active := coalesce((r->>'active')::boolean, true);
+    v_pseudo := nullif(trim(coalesce(r->>'player', '')), '');
+    v_player := null;
+    if v_pseudo is not null then
+      select id into v_player from public.players where lower(pseudo) = lower(v_pseudo);
+      if v_player is null then
+        v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'joueur « ' || v_pseudo || ' » inconnu');
+        continue;
+      end if;
+    end if;
+
+    select id into v_existing from public.quests where lower(trim(title)) = lower(v_title) order by id limit 1;
+    if v_existing is not null then
+      if not p_update then
+        v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'existe déjà');
+        continue;
+      end if;
+      update public.quests
+         set title = v_title, description = v_desc, points = v_points, difficulty = v_diff,
+             photo_required = v_photo, player_id = v_player, round = v_round, active = v_active
+       where id = v_existing;
+      v_updated := v_updated + 1;
+    else
+      insert into public.quests(title, description, points, player_id, round, active, photo_required, difficulty)
+      values (v_title, v_desc, v_points, v_player, v_round, v_active, v_photo, v_diff)
+      returning id into v_id;
+      v_created := v_created + 1;
+      if v_active then
+        if v_player is null then v_new_all := v_new_all + 1;
+        else v_new_personal := v_new_personal || v_player; end if;
+      end if;
+    end if;
+  end loop;
+
+  if v_new_all > 0 then
+    perform public._push(null, 'quete',
+      case when v_new_all = 1 then 'Nouvelle quête' else v_new_all || ' nouvelles quêtes' end,
+      'Ouvre l''onglet Quêtes de Wanted.', 'quete-import', false, now(), now() + interval '30 minutes');
+  end if;
+  for v_player in select distinct x from unnest(v_new_personal) x loop
+    perform public._push(v_player, 'quete', 'Nouvelle quête personnelle',
+      'Ouvre l''onglet Quêtes de Wanted.', 'quete-import-perso', false, now(), now() + interval '30 minutes');
+  end loop;
+  perform public._log('import_quetes', jsonb_build_object(
+    'crees', v_created, 'maj', v_updated, 'ignores', jsonb_array_length(v_skipped)));
+  return json_build_object('created', v_created, 'updated', v_updated, 'skipped', v_skipped);
+end $$;
+
 create or replace function public.org_delete_quest(p_id bigint)
 returns void language plpgsql volatile security definer
 set search_path = public

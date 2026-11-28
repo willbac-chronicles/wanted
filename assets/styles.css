@@ -326,3 +326,6 @@ h1.hook, h2.hook { font-family: var(--font-poster); font-weight: 400; color: var
 .rules-table tr:last-child td { border-bottom: 0; }
 .rules-table .num { text-align: right; font-weight: 800; white-space: nowrap; }
 .rules-sec summary .grow { flex: 1 1 auto; min-width: 0; }
+/* Case à cocher sur une ligne avec son libellé */
+label.check { display: flex; align-items: center; gap: 10px; margin-top: 12px; cursor: pointer; }
+label.check input[type="checkbox"] { width: 22px; height: 22px; flex: 0 0 auto; margin: 0; padding: 0; }

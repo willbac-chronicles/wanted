@@ -386,6 +386,25 @@ begin
   v_quest := public.org_save_quest(null, 'Avec photo', '', 1, null, null, true, true, 'difficile');
   insert into _report(test, ok) values ('quête : difficulté enregistrée',
     (select difficulty from public.quests where id = v_quest) = 'difficile');
+  -- Import groupé depuis un tableau : une seule notification, doublons et joueurs inconnus ignorés.
+  delete from public.push_jobs where kind = 'quete';
+  r := public.org_import_quests(jsonb_build_array(
+    jsonb_build_object('title', '__test_import A', 'points', 2, 'difficulty', 'moderee', 'photo_required', true),
+    jsonb_build_object('title', '__test_import B', 'points', 3, 'difficulty', 'difficile', 'round', 2),
+    jsonb_build_object('title', '__TEST_IMPORT A', 'points', 1),
+    jsonb_build_object('title', '__test_import C', 'player', '__personne__'),
+    jsonb_build_object('title', 'Avec photo', 'points', 1)), false);
+  insert into _report(test, ok, detail) values ('import de quêtes : 2 créées, 3 ignorées',
+    (r->>'created')::int = 2 and json_array_length(r->'skipped') = 3
+    and (select difficulty = 'moderee' and photo_required and points = 2 from public.quests where title = '__test_import A')
+    and (select round = 2 from public.quests where title = '__test_import B'), r::text);
+  insert into _report(test, ok, detail) values ('import de quêtes : une seule notification',
+    (select count(*) from public.push_jobs where kind = 'quete') = 1,
+    (select string_agg(title, ' | ') from public.push_jobs where kind = 'quete'));
+  r := public.org_import_quests(jsonb_build_array(jsonb_build_object('title', '__test_import B', 'points', 5)), true);
+  insert into _report(test, ok, detail) values ('import de quêtes : mise à jour par titre',
+    (r->>'updated')::int = 1 and (select points = 5 and round is null from public.quests where title = '__test_import B'), r::text);
+  delete from public.quests where title like '\_\_test\_import%';
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
   begin
     perform public.claim_quest(v_quest, 'sans photo');

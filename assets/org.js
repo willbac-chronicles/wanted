@@ -20,6 +20,7 @@
     reattribution: d => `Nouvelle cible pour ${d.chasseur}`,
     joueur_cree: d => `Joueur créé : ${d.joueur}`,
     import_joueurs: d => `Import : ${d.crees} joueur(s) créé(s), ${d.ignores} ignoré(s)`,
+    import_quetes: d => `Import de quêtes : ${d.crees} créée(s), ${d.maj} mise(s) à jour, ${d.ignores} ignorée(s)`,
     connexion: d => `${d.joueur} s'est connecté`,
     deconnexion: d => `${d.joueur} s'est déconnecté`,
     connexion_organisateur: () => "Connexion organisateur",
@@ -312,6 +313,14 @@
     });
   }
 
+  // Lit un fichier tableur ; un CSV est lu comme texte UTF-8 (sinon les accents sont abîmés).
+  async function readWorkbook(XLSX, file) {
+    if (/\.csv$/i.test(file.name) || file.type === "text/csv") {
+      return XLSX.read((await file.text()).replace(/^﻿/, ""), { type: "string", raw: true });
+    }
+    return XLSX.read(await file.arrayBuffer(), { type: "array" });
+  }
+
   // Repère les colonnes « Nom » et « Pseudo » ; sans en-tête : A = nom, B = pseudo.
   function rowsFromSheet(matrix) {
     const clean = v => String(v == null ? "" : v).trim();
@@ -334,7 +343,7 @@
     if (!file) return;
     try {
       const XLSX = await loadSheetJs();
-      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const wb = await readWorkbook(XLSX, file);
       const sheet = wb.Sheets[wb.SheetNames[0]];
       importRows = rowsFromSheet(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }));
       const taken = new Set(data.players.map(p => p.pseudo.toLowerCase()));
@@ -566,6 +575,165 @@
       }
     } catch (err) { toast(err.message, "red"); }
   };
+
+  // ---------- Import de quêtes (Google Sheet, Excel, CSV) ----------
+
+  const QI_COLS = ["Titre", "Description", "Points", "Difficulté", "Photo obligatoire", "Pour", "Manche", "Visible"];
+  // Modèle téléchargeable, pré-rempli avec des idées de quêtes (à modifier librement).
+  const QI_TEMPLATE = [
+    ["Selfie devant un sapin", "Un selfie devant un sapin décoré.", 1, "facile", "oui", "", "", "oui"],
+    ["Vitrine de Noël", "Photo d'une vitrine décorée pour Noël.", 1, "facile", "oui", "", "", "oui"],
+    ["Chasse à l'étoile", "Trouve une étoile : décoration, enseigne, motif…", 1, "facile", "oui", "", "", "oui"],
+    ["Graffiti de grève", "Écris « GRÈVE » avec ce que tu trouves par terre (feuilles, cailloux…).", 1, "facile", "oui", "", "", "oui"],
+    ["Guirlande allumée", "Photo d'une guirlande lumineuse allumée.", 1, "facile", "oui", "", "", "oui"],
+    ["Selfie entre collègues", "Selfie avec un autre joueur, chasseur ou cible.", 2, "modérée", "oui", "", "", "oui"],
+    ["Repérer le patron", "Trouve un Père Noël : figurine, affiche ou décor.", 2, "modérée", "oui", "", "", "oui"],
+    ["Renne de fortune", "Reconstitue un renne avec des objets trouvés.", 2, "modérée", "oui", "", "", "oui"],
+    ["Trois couleurs", "Trois décorations de couleurs différentes sur une même photo.", 2, "modérée", "oui", "", "", "oui"],
+    ["Plaque à prénom", "Photo d'un panneau de rue qui contient un prénom.", 2, "modérée", "oui", "", "", "oui"],
+    ["Filature", "Photo de ta cible sans qu'elle te voie. Elle doit être reconnaissable.", 4, "difficile", "oui", "", "", "oui"],
+    ["Pétition des lutins", "Fais signer une « pétition des lutins en grève » par 5 passants volontaires.", 3, "difficile", "oui", "", "", "oui"],
+    ["Soutien des commerçants", "Un commerçant pose avec ton bonnet ou ton panneau de lutin (avec son accord).", 3, "difficile", "oui", "", "", "oui"],
+    ["Assemblée générale", "Photo de groupe d'au moins 4 joueurs.", 3, "difficile", "oui", "", "", "oui"],
+    ["Chorale clandestine", "Fais deviner un chant de Noël à un passant en le fredonnant, puis photo avec lui (avec son accord).", 3, "difficile", "oui", "", "", "oui"]
+  ];
+  let qiRows = null;
+  const normTxt = v => String(v == null ? "" : v).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const yes = v => { const t = normTxt(v); return t === "" ? null : /^(oui|o|yes|y|x|vrai|true|1)$/.test(t) ? true : /^(non|n|no|faux|false|0)$/.test(t) ? false : "?"; };
+
+  // Lit la matrice du tableau : repère les colonnes par leur en-tête (sinon ordre du modèle).
+  function questsFromSheet(matrix) {
+    const lines = matrix.map(r => (r || []).map(v => String(v == null ? "" : v).trim())).filter(r => r.some(Boolean));
+    if (!lines.length) return [];
+    const head = lines[0].map(normTxt);
+    const find = re => head.findIndex(h => re.test(h));
+    let idx = { title: find(/^titre|^quete|^nom|^title/), description: find(/^desc/), points: find(/^point|^pts/),
+                difficulty: find(/^diff|^niveau/), photo: find(/photo/), player: find(/^pour|^joueur|^destinataire/),
+                round: find(/^manche|^round/), active: find(/^visible|^actif|^active/) };
+    let body = lines.slice(1);
+    if (idx.title < 0) { idx = { title: 0, description: 1, points: 2, difficulty: 3, photo: 4, player: 5, round: 6, active: 7 }; body = lines; }
+    const cell = (r, k) => (idx[k] >= 0 ? (r[idx[k]] || "") : "");
+    return body.map((r, i) => {
+      const errs = [];
+      const title = cell(r, "title");
+      if (!title) errs.push("titre vide");
+      if (title.length > 80) errs.push("titre trop long (80 max)");
+      const pRaw = cell(r, "points").replace(",", ".").replace("−", "-");
+      const points = pRaw === "" ? 1 : Number(pRaw);
+      if (!Number.isInteger(points) || points < -50 || points > 50) errs.push("points invalides");
+      const d = normTxt(cell(r, "difficulty"));
+      const difficulty = d === "" ? "facile" : /^fac/.test(d) ? "facile" : /^(mod|moy|inter)/.test(d) ? "moderee" : /^(dif|dur)/.test(d) ? "difficile" : null;
+      if (!difficulty) errs.push("difficulté inconnue");
+      const photo = yes(cell(r, "photo")), active = yes(cell(r, "active"));
+      if (photo === "?") errs.push("photo : oui ou non");
+      if (active === "?") errs.push("visible : oui ou non");
+      const rr = normTxt(cell(r, "round")).replace(/^manche\s*/, "");
+      const round = rr === "" || /^tout/.test(rr) ? null : Number(rr);
+      if (round !== null && round !== 1 && round !== 2) errs.push("manche : 1, 2 ou vide");
+      const pl = cell(r, "player");
+      const player = /^(tous|tout le monde|everyone)$/i.test(pl.trim()) ? "" : pl;
+      return { line: i + 1, title, description: cell(r, "description").slice(0, 1000), points, difficulty,
+               photo_required: photo === true, player, round, active: active !== false, errs };
+    });
+  }
+
+  function showQuestImport(source) {
+    const existing = new Set(questData.quests.map(q => q.title.trim().toLowerCase()));
+    const upd = $("qi-update").checked;
+    const state = r => r.errs.length ? `<span class="badge plain">${esc(r.errs.join(", "))}</span>`
+      : existing.has(r.title.toLowerCase()) ? (upd ? `<span class="badge blue">mise à jour</span>` : `<span class="badge plain">existe déjà</span>`)
+      : `<span class="badge green">nouvelle</span>`;
+    const ok = qiRows.filter(r => !r.errs.length && (upd || !existing.has(r.title.toLowerCase())));
+    $("qi-preview").innerHTML = `
+      <div class="card info" style="margin-top:12px">
+        <h3>${icon("upload")} ${qiRows.length} ligne(s) lue(s) dans ${esc(source)}</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Titre</th><th>Pts</th><th>Difficulté</th><th>Photo</th><th>Pour</th><th>Manche</th><th>État</th></tr></thead>
+          <tbody>${qiRows.map(r => `<tr><td>${esc(r.title || "—")}${r.active ? "" : " <span class=\"small muted\">(masquée)</span>"}</td><td>${esc(r.points)}</td>
+            <td>${esc(DIFF_LABELS[r.difficulty] || "—")}</td><td>${r.photo_required ? "oui" : "non"}</td><td>${esc(r.player || "tous")}</td>
+            <td>${esc(r.round || "toutes")}</td><td>${state(r)}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p class="small muted">Les nouvelles quêtes visibles déclenchent une seule notification aux joueurs. Tu pourras toutes les modifier ensuite ci-dessous.</p>
+        <div class="row">
+          <button class="primary" id="qi-go"${ok.length ? "" : " disabled"}>Importer ${ok.length} quête(s)</button>
+          <button id="qi-cancel">Annuler</button>
+        </div>
+      </div>`;
+    $("qi-cancel").onclick = () => { qiRows = null; $("qi-preview").innerHTML = ""; };
+    $("qi-go").onclick = doQuestImport;
+  }
+  $("qi-update").onchange = () => { if (qiRows) showQuestImport(qiSource); };
+  let qiSource = "";
+
+  async function readQuestMatrix(matrix, source) {
+    qiRows = questsFromSheet(matrix);
+    qiSource = source;
+    if (!qiRows.length) { $("qi-preview").innerHTML = `<p class="muted">Aucune ligne trouvée.</p>`; return; }
+    if (!questData.quests.length) { try { questData = await rpc("org_get_quests"); } catch (e) { /* aperçu sans comparaison */ } }
+    showQuestImport(source);
+  }
+
+  // Lien Google Sheet → export CSV de l'onglet affiché (gid), lisible sans compte si le partage est « lecture par lien ».
+  function sheetCsvUrl(link) {
+    const m = String(link).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{20,})/);
+    if (!m) return null;
+    const g = String(link).match(/[#&?]gid=(\d+)/);
+    return `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv&headers=1${g ? "&gid=" + g[1] : ""}`;
+  }
+  try { $("qi-url").value = localStorage.getItem("wanted-quest-sheet") || ""; } catch (e) { /* ignoré */ }
+
+  $("qi-read").onclick = async () => {
+    const link = $("qi-url").value.trim();
+    const url = sheetCsvUrl(link);
+    if (!url) { toast("Colle le lien complet du Google Sheet (docs.google.com/spreadsheets/d/…).", "red"); return; }
+    try { localStorage.setItem("wanted-quest-sheet", link); } catch (e) { /* ignoré */ }
+    $("qi-read").disabled = true;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      const text = await res.text();
+      if (!res.ok || /^\s*<(!doctype|html)/i.test(text)) {
+        throw new Error("Tableau illisible : partage-le en « Toute personne disposant du lien : lecteur ».");
+      }
+      const XLSX = await loadSheetJs();
+      const wb = XLSX.read(text, { type: "string", raw: true });
+      await readQuestMatrix(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" }), "le Google Sheet");
+    } catch (e) {
+      toast(/fetch/i.test(e.message) ? "Tableau illisible : vérifie le lien et le partage « Toute personne disposant du lien »." : e.message, "red");
+    } finally { $("qi-read").disabled = false; }
+  };
+
+  $("qi-file-btn").onclick = () => { $("qi-file").value = ""; $("qi-file").click(); };
+  $("qi-file").onchange = async () => {
+    const file = $("qi-file").files[0];
+    if (!file) return;
+    try {
+      const XLSX = await loadSheetJs();
+      const wb = await readWorkbook(XLSX, file);
+      await readQuestMatrix(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" }), `« ${file.name} »`);
+    } catch (e) { toast(e.message, "red"); }
+  };
+
+  $("qi-template").onclick = () => downloadCsv("wanted-modele-quetes.csv", [QI_COLS, ...QI_TEMPLATE]);
+
+  async function doQuestImport() {
+    const rows = qiRows.filter(r => !r.errs.length).map(r => ({
+      title: r.title, description: r.description, points: r.points, difficulty: r.difficulty,
+      photo_required: r.photo_required, player: r.player, round: r.round, active: r.active }));
+    $("qi-go").disabled = true;
+    try {
+      const res = await rpc("org_import_quests", { p_rows: rows, p_update: $("qi-update").checked });
+      const bad = qiRows.filter(r => r.errs.length).length;
+      qiRows = null;
+      $("qi-preview").innerHTML = `
+        <div class="card info" style="margin-top:12px">
+          <h3>${icon("check")} ${res.created} quête(s) créée(s)${res.updated ? `, ${res.updated} mise(s) à jour` : ""}</h3>
+          ${res.skipped.length || bad ? `<p class="small">Ignorées : ${esc(res.skipped.map(s => `${s.titre || "ligne " + s.ligne} (${s.motif})`).concat(bad ? [`${bad} ligne(s) avec une erreur`] : []).join(" · "))}</p>` : ""}
+          <button id="qi-close">Fermer</button>
+        </div>`;
+      $("qi-close").onclick = () => { $("qi-preview").innerHTML = ""; };
+      await loadQuests();
+    } catch (e) { toast(e.message, "red"); $("qi-go").disabled = false; }
+  }
 
   $("claims").onclick = async e => {
     const pr = e.target.closest("button[data-proof]");
