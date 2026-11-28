@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=1.6" />
+  <link rel="stylesheet" href="assets/styles.css?v=1.7" />
 </head>
 <body>
   <div class="wrap wide">
@@ -170,7 +170,7 @@
             <div style="flex:1 1 160px"><label for="q-difficulty">Difficulté</label>
               <select id="q-difficulty"><option value="facile">Facile</option><option value="moderee">Modérée</option><option value="difficile">Difficile</option></select></div>
             <div style="flex:0 1 160px"><label><input type="checkbox" id="q-active" checked /> Visible des joueurs</label></div>
-            <div style="flex:0 1 160px"><label><input type="checkbox" id="q-photo" /> Photo obligatoire</label></div>
+            <div style="flex:0 1 160px"><label><input type="checkbox" id="q-photo" /> Preuve obligatoire (photo ou vidéo)</label></div>
           </div>
           <p></p>
           <div class="row">
@@ -183,7 +183,7 @@
         <section class="card">
           <h2>Importer des quêtes</h2>
           <p class="small muted">Depuis un Google Sheet partagé en lecture (« Toute personne disposant du lien »), ou depuis un fichier Excel, LibreOffice ou CSV. Le tableau fait foi : chaque import crée les nouvelles quêtes, met à jour celles de même titre et supprime celles qui n'y sont plus.
-            Colonnes : <b>Titre</b>, Description, Points, Difficulté (facile, modérée, difficile), Photo obligatoire (oui/non), Pour (pseudo, vide = tout le monde), Manche (1, 2, vide = toutes), Visible (oui/non).
+            Colonnes : <b>Titre</b>, Description, Points, Difficulté (facile, modérée, difficile), Photo obligatoire (oui/non : une photo ou une vidéo est alors exigée), Pour (pseudo, vide = tout le monde), Manche (1, 2, vide = toutes), Visible (oui/non).
             Seul le titre est obligatoire.</p>
           <label for="qi-url">Lien du Google Sheet</label>
           <div class="row">
@@ -244,10 +244,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="config.js?v=0.3"></script>
-  <script src="assets/common.js?v=1.0"></script>
+  <script src="assets/common.js?v=1.1"></script>
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=1.8"></script>
+  <script src="assets/org.js?v=1.9"></script>
 </body>
 </html>

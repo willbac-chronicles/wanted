@@ -505,15 +505,20 @@
   let refusing = 0;
   let doneOpen = false; // section « Déjà traitées » dépliée
 
+  const isVideoPath = p => /\.(mp4|mov|webm|3gp)$/i.test(p || "");
+
   function claimHtml(c) {
     return `
         <div class="claim ${c.status}">
           <div class="row">
             <div class="grow"><b>${esc(c.pseudo)}</b> · ${esc(c.title)} <span class="badge gold">${esc((c.points > 0 ? "+" : "") + c.points)} pt</span>
               <span class="badge ${c.status === "validee" ? "green" : c.status === "refusee" ? "plain" : "blue"}">${esc(CLAIM_LABELS[c.status])}</span>
-              <div class="small muted">Déclarée ${esc(fmtTime(c.created_at))}${c.decided_at ? ` · traitée ${esc(fmtTime(c.decided_at))}` : ""}${c.note ? ` · « ${esc(c.note)} »` : ""}${c.photo_path ? "" : " · sans photo"}</div>
+              <div class="small muted">Déclarée ${esc(fmtTime(c.created_at))}${c.decided_at ? ` · traitée ${esc(fmtTime(c.decided_at))}` : ""}${c.note ? ` · « ${esc(c.note)} »` : ""}${c.photo_path ? "" : " · sans preuve"}</div>
               ${c.status === "refusee" && c.refusal_reason ? `<div class="small">Motif du refus : ${esc(c.refusal_reason)}</div>` : ""}
-              ${c.photo_path ? `<button class="proof-btn" data-proof="${esc(c.photo_path)}" aria-label="Agrandir la photo de preuve"><img class="proof" alt="Photo de preuve de ${esc(c.pseudo)}" /></button>` : ""}</div>
+              ${!c.photo_path ? "" : isVideoPath(c.photo_path)
+                ? `<video class="proof" controls playsinline preload="metadata" data-vproof="${esc(c.photo_path)}"></video>
+                   <button class="small" data-proof="${esc(c.photo_path)}">${icon("video")} Ouvrir la vidéo</button>`
+                : `<button class="proof-btn" data-proof="${esc(c.photo_path)}" aria-label="Agrandir la photo de preuve"><img class="proof" alt="Photo de preuve de ${esc(c.pseudo)}" /></button>`}</div>
             ${c.status !== "validee" ? `<button class="small green" data-claim="${c.id}" data-ok="1">${icon("check")} Valider</button>` : ""}
             ${c.status !== "refusee" ? `<button class="small danger" data-refuse="${c.id}">Refuser</button>` : ""}
           </div>
@@ -544,8 +549,11 @@
         </details>` : "");
       const det = $("claims").querySelector("details");
       if (det) det.ontoggle = () => { doneOpen = det.open; };
-      $("claims").querySelectorAll("button[data-proof]").forEach(async b => {
+      $("claims").querySelectorAll("button.proof-btn[data-proof]").forEach(async b => {
         try { b.querySelector("img").src = await WC.mediaUrl(b.dataset.proof); } catch (e) { b.querySelector("img").alt = "Photo indisponible"; }
+      });
+      $("claims").querySelectorAll("video[data-vproof]").forEach(async v => {
+        try { v.src = await WC.mediaUrl(v.dataset.vproof); } catch (e) { v.replaceWith(Object.assign(document.createElement("p"), { className: "small muted", textContent: "Vidéo indisponible" })); }
       });
       drawOrgQuests();
     } catch (e) { toast(e.message, "red"); }
@@ -577,7 +585,7 @@
           <div class="row">
             <div class="grow"><b>${esc(q.title)}</b> <span class="badge gold">${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
               <span class="badge plain">${esc(DIFF_LABELS[q.difficulty] || "Facile")}</span>
-              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.photo_required ? " · photo obligatoire" : ""}${q.active ? "" : " · masquée"}</span>
+              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.photo_required ? " · preuve obligatoire" : ""}${q.active ? "" : " · masquée"}</span>
               ${q.description ? `<div class="small">${esc(q.description)}</div>` : ""}</div>
             <button class="small" data-q="edit" data-id="${q.id}">Modifier</button>
             <button class="small" data-q="toggle" data-id="${q.id}">${q.active ? "Masquer" : "Afficher"}</button>

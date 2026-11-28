@@ -691,6 +691,7 @@
 
   // ---------- Quêtes ----------
 
+  const VIDEO_MAX_MB = 50; // limite d'un fichier sur le plan gratuit de Supabase
   const QUEST_STATE = {
     en_attente: `<span class="badge blue">${icon("clock")} En attente de validation</span>`,
     validee: `<span class="badge green">${icon("check")} Validée</span>`,
@@ -742,17 +743,23 @@
           </div>
           ${q.description ? `<p style="margin-top:8px">${esc(q.description)}</p>` : ""}
           <p class="small muted">${q.personal ? "Quête personnelle" : "Pour tout le monde"}${q.round ? " · manche " + q.round : ""}</p>
-          ${q.photo_required ? `<p class="small"><span class="badge plain">${icon("camera")} Photo obligatoire</span></p>` : ""}
-          ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo && q.status !== "refusee" ? ` <span class="badge plain">${icon("camera")} photo envoyée</span>` : ""}</p>` : ""}
+          ${q.photo_required ? `<p class="small"><span class="badge plain">${icon("camera")} Preuve obligatoire : photo ou vidéo</span></p>` : ""}
+          ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo && q.status !== "refusee" ? ` <span class="badge plain">${icon("camera")} preuve envoyée</span>` : ""}</p>` : ""}
           ${q.status === "refusee" && q.reason ? `<p class="small quest-reason"><b>Motif :</b> ${esc(q.reason)}</p>` : ""}
           ${!q.status || q.status === "refusee" ? `
             <button class="green" data-quest="${q.id}">${icon("check")} J'ai réussi</button>
             <div class="claim-form hidden" data-form="${q.id}">
               <label for="qn-${q.id}">Un mot pour l'organisation (facultatif)</label>
               <textarea id="qn-${q.id}" maxlength="300" rows="2" placeholder="Comment as-tu réussi ?"></textarea>
-              <label class="btn" style="margin-top:8px">${icon("camera")} ${q.photo_required ? "Prendre la photo (obligatoire)" : "Ajouter une photo (conseillé)"}
-                <input type="file" accept="image/*" capture="environment" class="hidden" data-photo="${q.id}" /></label>
+              <p class="small muted" style="margin:8px 0 0">${q.photo_required ? "Preuve obligatoire :" : "Preuve conseillée :"} une photo ou une vidéo (${VIDEO_MAX_MB} Mo au plus, 30 secondes suffisent).</p>
+              <div class="row" style="margin-top:6px">
+                <label class="btn">${icon("camera")} Photo
+                  <input type="file" accept="image/*" capture="environment" class="hidden" data-photo="${q.id}" /></label>
+                <label class="btn">${icon("video")} Vidéo
+                  <input type="file" accept="video/*" class="hidden" data-video="${q.id}" /></label>
+              </div>
               <img class="proof hidden" alt="Aperçu de la photo" data-preview="${q.id}" />
+              <video class="proof hidden" controls playsinline preload="metadata" data-vpreview="${q.id}"></video>
               <div class="row" style="margin-top:8px">
                 <button class="green" data-send="${q.id}" data-required="${q.photo_required ? 1 : 0}">${icon("send")} Envoyer la déclaration</button>
                 <button data-cancel="${q.id}">Annuler</button>
@@ -763,7 +770,24 @@
   }
   // Formulaire de déclaration ouvert : on ne recharge pas la liste pour ne pas perdre la saisie.
   let claimOpen = 0;
-  const proofs = new Map(); // id de quête → photo réduite (Blob)
+  const proofs = new Map(); // id de quête → { blob, ext, type } (photo réduite ou vidéo)
+  const VIDEO_EXT = { "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "video/3gpp": "3gp" };
+  function videoKind(file) {
+    let type = (file.type || "").toLowerCase();
+    if (!VIDEO_EXT[type]) {
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      type = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm", "3gp": "video/3gpp" }[ext] || "";
+    }
+    return VIDEO_EXT[type] ? { type, ext: VIDEO_EXT[type] } : null;
+  }
+  function showProof(id, blob, isVideo) {
+    const img = document.querySelector(`[data-preview="${id}"]`);
+    const vid = document.querySelector(`[data-vpreview="${id}"]`);
+    [img, vid].forEach(el => { if (el.src) URL.revokeObjectURL(el.src); el.removeAttribute("src"); el.classList.add("hidden"); });
+    const el = isVideo ? vid : img;
+    el.src = URL.createObjectURL(blob);
+    el.classList.remove("hidden");
+  }
   const form = id => document.querySelector(`[data-form="${id}"]`);
   $("quest-list").onclick = async e => {
     const open = e.target.closest("button[data-quest]");
@@ -787,13 +811,14 @@
     if (!b) return;
     const id = Number(b.dataset.send);
     const photo = proofs.get(id);
-    if (b.dataset.required === "1" && !photo) return toast("Ajoute d'abord la photo de preuve.", "red");
+    if (b.dataset.required === "1" && !photo) return toast("Ajoute d'abord une photo ou une vidéo de preuve.", "red");
     b.disabled = true;
     try {
       let path = null;
       if (photo) {
-        toast("Envoi de la photo…");
-        path = await WC.uploadMedia("quests", photo, "jpg", "image/jpeg");
+        const isVideo = photo.ext !== "jpg";
+        toast(isVideo ? "Envoi de la vidéo… Garde l'appli ouverte, ça peut prendre un moment." : "Envoi de la photo…");
+        path = await WC.uploadMedia("quests", photo.blob, photo.ext, photo.type);
       }
       await rpc("claim_quest", { p_quest: id, p_note: $("qn-" + id).value.trim(), p_photo: path });
       toast("Quête déclarée : l'organisation va la valider.", "ok");
@@ -803,16 +828,25 @@
     } catch (err) { toast(err.message, "red"); b.disabled = false; }
   };
   $("quest-list").onchange = async e => {
-    const input = e.target.closest("input[data-photo]");
+    const input = e.target.closest("input[data-photo], input[data-video]");
     if (!input || !input.files || !input.files[0]) return;
-    const id = Number(input.dataset.photo);
+    const file = input.files[0];
+    const isVideo = !!input.dataset.video;
+    const id = Number(input.dataset.photo || input.dataset.video);
     try {
-      const blob = await resizeImage(input.files[0], 1400);
-      proofs.set(id, blob);
-      const img = document.querySelector(`[data-preview="${id}"]`);
-      if (img.src) URL.revokeObjectURL(img.src);
-      img.src = URL.createObjectURL(blob);
-      img.classList.remove("hidden");
+      if (isVideo) {
+        const kind = videoKind(file);
+        if (!kind) throw new Error("Format de vidéo non reconnu : filme avec l'appareil photo du téléphone.");
+        if (file.size > VIDEO_MAX_MB * 1024 * 1024) {
+          throw new Error(`Vidéo trop lourde (${Math.round(file.size / 1048576)} Mo, ${VIDEO_MAX_MB} Mo au plus) : filme moins longtemps.`);
+        }
+        proofs.set(id, { blob: file, ext: kind.ext, type: kind.type });
+        showProof(id, file, true);
+      } else {
+        const blob = await resizeImage(file, 1400);
+        proofs.set(id, { blob, ext: "jpg", type: "image/jpeg" });
+        showProof(id, blob, false);
+      }
     } catch (err) { toast(err.message, "red"); }
     input.value = "";
   };

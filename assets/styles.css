@@ -275,7 +275,8 @@ button.mic .ico { width: 22px; height: 22px; }
 .claim-form { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 label.btn { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 img.proof { display: block; max-width: 100%; max-height: 240px; margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); }
-img.proof.hidden { display: none; }
+img.proof.hidden, video.proof.hidden { display: none; }
+video.proof { display: block; width: 100%; max-width: 360px; max-height: 260px; margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); background: #000; }
 button.proof-btn { padding: 0; border: 0; background: none; min-height: 0; display: block; }
 button.proof-btn img.proof { max-height: 120px; }
 .chat-input input { min-width: 0; }

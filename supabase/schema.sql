@@ -1997,8 +1997,8 @@ begin
   select * into c from public.quest_claims where quest_id = q.id and player_id = v_me;
   if c.status = 'validee' then return json_build_object('ok', true, 'already', true); end if;
   p_photo := nullif(trim(coalesce(p_photo, '')), '');
-  if q.photo_required and p_photo is null then raise exception 'Photo obligatoire pour cette quête'; end if;
-  if p_photo is not null and not public._media_ok(p_photo, 'quests', array['jpg']) then
+  if q.photo_required and p_photo is null then raise exception 'Photo ou vidéo obligatoire pour cette quête'; end if;
+  if p_photo is not null and not public._media_ok(p_photo, 'quests', array['jpg', 'mp4', 'mov', 'webm', '3gp']) then
     raise exception 'Photo introuvable : réessaie';
   end if;
   insert into public.quest_claims(quest_id, player_id, note, photo_path)
@@ -2297,8 +2297,10 @@ create policy "wanted_photos_delete" on storage.objects for delete to authentica
 -- Messages vocaux et photos de preuve des quêtes : bucket privé « media ».
 -- Chacun dépose dans son propre dossier (<chat|quests>/<auth uid>/...) ; la lecture suit les droits du chat.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('media', 'media', false, 5242880,
-        array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/x-m4a', 'image/jpeg'])
+-- v11 : vidéos de preuve des quêtes (50 Mo au plus, la limite du plan gratuit de Supabase).
+values ('media', 'media', false, 52428800,
+        array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/x-m4a', 'image/jpeg',
+              'video/mp4', 'video/quicktime', 'video/webm', 'video/3gpp'])
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit,
                                allowed_mime_types = excluded.allowed_mime_types;
 
