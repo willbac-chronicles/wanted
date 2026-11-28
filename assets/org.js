@@ -547,7 +547,32 @@
       $("claims").querySelectorAll("button[data-proof]").forEach(async b => {
         try { b.querySelector("img").src = await WC.mediaUrl(b.dataset.proof); } catch (e) { b.querySelector("img").alt = "Photo indisponible"; }
       });
-      $("quests").innerHTML = questData.quests.map(q => `
+      drawOrgQuests();
+    } catch (e) { toast(e.message, "red"); }
+  }
+
+  // Sous-onglets par difficulté, comme côté joueur (le dernier choisi est mémorisé sur cet appareil).
+  const ODIFFS = ["facile", "moderee", "difficile"];
+  let orgDiff = "facile";
+  try { const d = localStorage.getItem("wanted-org-quest-diff"); if (ODIFFS.includes(d)) orgDiff = d; } catch (e) { /* ignoré */ }
+  const odiffOf = q => (ODIFFS.includes(q.difficulty) ? q.difficulty : "facile");
+  $("oq-tabs").onclick = e => {
+    const b = e.target.closest("button[data-diff]");
+    if (!b || b.dataset.diff === orgDiff) return;
+    orgDiff = b.dataset.diff;
+    try { localStorage.setItem("wanted-org-quest-diff", orgDiff); } catch (err) { /* ignoré */ }
+    drawOrgQuests();
+  };
+
+  function drawOrgQuests() {
+    ODIFFS.forEach(d => {
+      const n = questData.quests.filter(q => odiffOf(q) === d).length;
+      $("oq-n-" + d).textContent = n ? `(${n})` : "";
+    });
+    document.querySelectorAll("#oq-tabs button").forEach(b => b.classList.toggle("active", b.dataset.diff === orgDiff));
+    const list = questData.quests.filter(q => odiffOf(q) === orgDiff);
+    {
+      $("quests").innerHTML = list.map(q => `
         <div class="quest-row" style="${q.active ? "" : "opacity:.6"}">
           <div class="row">
             <div class="grow"><b>${esc(q.title)}</b> <span class="badge gold">${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
@@ -558,8 +583,8 @@
             <button class="small" data-q="toggle" data-id="${q.id}">${q.active ? "Masquer" : "Afficher"}</button>
             <button class="small danger" data-q="delete" data-id="${q.id}">Suppr.</button>
           </div>
-        </div>`).join("") || `<p class="muted">Aucune quête. Crée la première ci-dessus.</p>`;
-    } catch (e) { toast(e.message, "red"); }
+        </div>`).join("") || `<p class="muted">${questData.quests.length ? "Aucune quête " + DIFF_LABELS[orgDiff].toLowerCase() + "." : "Aucune quête. Crée la première ci-dessus."}</p>`;
+    }
   }
 
   function resetQuestForm() {
@@ -586,6 +611,8 @@
         p_difficulty: $("q-difficulty").value
       });
       toast($("q-id").value ? "Quête modifiée." : "Quête créée.", "ok");
+      orgDiff = $("q-difficulty").value; // on affiche l'onglet de la quête enregistrée
+      try { localStorage.setItem("wanted-org-quest-diff", orgDiff); } catch (err) { /* ignoré */ }
       resetQuestForm();
       await loadQuests();
     } catch (e) { toast(e.message, "red"); }

@@ -306,6 +306,7 @@ h1.hook, h2.hook { font-family: var(--font-poster); font-weight: 400; color: var
 /* Sous-onglets des quêtes (difficulté) */
 .subtabs { position: static; border-bottom: 0; padding: 0; background: transparent; }
 .subtabs button { flex: 1 1 0; justify-content: center; }
+.subtabs .tab-count { font-size: .85em; opacity: .75; color: inherit; }
 
 /* Déclarations déjà traitées (organisation) */
 .claims-done { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }

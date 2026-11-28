@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito:wght@400;600;700;800&family=Rye&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="assets/styles.css?v=1.5" />
+  <link rel="stylesheet" href="assets/styles.css?v=1.6" />
 </head>
 <body>
   <div class="wrap wide">
@@ -208,6 +208,11 @@
 
         <section class="card">
           <h2>Quêtes</h2>
+          <nav class="tabs subtabs" id="oq-tabs" aria-label="Difficulté des quêtes">
+            <button data-diff="facile" class="active">Facile <span class="tab-count" id="oq-n-facile"></span></button>
+            <button data-diff="moderee">Modérée <span class="tab-count" id="oq-n-moderee"></span></button>
+            <button data-diff="difficile">Difficile <span class="tab-count" id="oq-n-difficile"></span></button>
+          </nav>
           <div id="quests"></div>
         </section>
       </div>
@@ -244,6 +249,6 @@
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=1.6"></script>
+  <script src="assets/org.js?v=1.7"></script>
 </body>
 </html>
