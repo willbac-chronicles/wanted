@@ -132,6 +132,12 @@ begin
     and (st->'target'->>'motif')::int between 1 and 40, st->'target'->>'motif');
   insert into _report(test, ok, detail) values ('barème transmis à l''interface',
     (st->'game'->'points'->>'capture')::int = (select capture_points from public.games where id = 1), (st->'game'->'points')::text);
+  insert into _report(test, ok, detail) values ('règles : durées et pings transmis à l''interface',
+    json_array_length(st->'game'->'rules'->'pings') = (select count(*) from public._ping_plan())
+    and (st->'game'->'rules'->>'challenge_seconds')::int = (select challenge_seconds from public.games where id = 1)
+    and (select count(*) from public.pings where round = (select round from public.games where id = 1) and kind <> 'manuel')
+        = (select count(*) from public._ping_plan()),
+    (st->'game'->'rules')::text);
   insert into _report(test, ok, detail) values ('compteur : 1 chasseur après le tirage en boucle',
     (st->'me'->>'hunters')::int = 1, st->'me'->>'hunters');
 

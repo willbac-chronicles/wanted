@@ -494,6 +494,11 @@ begin
 end $$;
 
 -- Pings de la manche, calculés depuis le START : chasseurs à +15, +30, +45 ; général à +40.
+-- Calendrier des pings d'une manche (minutes après START). Seule source : sert au planning et à l'onglet Règles.
+create or replace function public._ping_plan()
+returns table(m int, kind text) language sql immutable
+as $$ values (15, 'chasseur'), (30, 'chasseur'), (40, 'general'), (45, 'chasseur') $$;
+
 create or replace function public._schedule_pings(p_round int, p_start timestamptz, p_window int)
 returns void language plpgsql volatile security definer
 set search_path = public
@@ -505,7 +510,7 @@ begin
   insert into public.pings(round, kind, scheduled_at, window_end)
   select p_round, k.kind, p_start + make_interval(mins => k.m),
          p_start + make_interval(mins => k.m, secs => p_window)
-    from (values (15, 'chasseur'), (30, 'chasseur'), (40, 'general'), (45, 'chasseur')) as k(m, kind);
+    from public._ping_plan() as k(m, kind);
 
   -- Notifications : 1 min avant (le temps d'ouvrir l'appli et de chauffer le GPS), puis à l'heure.
   insert into public.push_jobs(kind, round, ref, title, body, tag, urgent, send_at, expires_at)
@@ -748,6 +753,17 @@ begin
   return json_build_object('pseudo', p.pseudo);
 end $$;
 
+-- Paramètres de jeu affichés dans l'onglet Règles (aucun chiffre écrit en dur côté appli).
+create or replace function public._rules_json(g public.games)
+returns json language sql stable
+as $$
+  select json_build_object(
+    'dispersion_minutes', g.dispersion_minutes, 'round_minutes', g.round_minutes,
+    'challenge_seconds', g.challenge_seconds, 'immunity_seconds', g.immunity_seconds,
+    'cooldown_seconds', g.cooldown_seconds, 'ping_window_seconds', g.ping_window_seconds,
+    'pings', (select json_agg(json_build_object('m', k.m, 'kind', k.kind) order by k.m) from public._ping_plan() k))
+$$;
+
 create or replace function public.get_my_state()
 returns json language plpgsql volatile security definer
 set search_path = public
@@ -808,7 +824,8 @@ begin
       'start_at', g.start_at, 'end_at', g.end_at,
       'immunity_seconds', g.immunity_seconds,
       'points', json_build_object('capture', g.capture_points, 'captured', abs(g.captured_penalty),
-                                  'missed_ping', abs(g.missed_ping_penalty), 'survivor', g.survivor_bonus)),
+                                  'missed_ping', abs(g.missed_ping_penalty), 'survivor', g.survivor_bonus),
+      'rules', public._rules_json(g)),
     'me', v_me_json,
     'target', v_target,
     -- Mon repérage en cours (en tant que chasseur).
@@ -1159,7 +1176,9 @@ begin
       'status', g.status, 'round', g.round,
       'dispersion_started_at', g.dispersion_started_at,
       'start_at', g.start_at, 'end_at', g.end_at,
-      'dispersion_minutes', g.dispersion_minutes, 'round_minutes', g.round_minutes),
+      'dispersion_minutes', g.dispersion_minutes, 'round_minutes', g.round_minutes,
+      'points', json_build_object('capture', g.capture_points, 'captured', abs(g.captured_penalty),
+                                  'missed_ping', abs(g.missed_ping_penalty), 'survivor', g.survivor_bonus)),
     'players', (
       select coalesce(json_agg(x order by x.pseudo), '[]'::json) from (
         select p.id, p.pseudo, p.full_name, p.access_code, p.photo_path, p.capture_code, p.immune_until, p.active,

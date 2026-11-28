@@ -142,6 +142,8 @@
     }).join("") || `<div class="muted">Rien pour l'instant.</div>`;
 
     setBadge("badge-quetes", data.claims_pending);
+    const P = data.game.points;
+    if (P) $("score-legend").textContent = `Captures : +${P.capture} chacune. Capturé : −${P.captured} chacune. Ping manqué : −${P.missed_ping}. Bonus survivant : +${P.survivor}. Corrections : points ajoutés ou retirés à la main.`;
     setBadge("badge-chat", tab !== "chat" ? (data.chat_unread || []).length : 0, "nouveau");
     renderChatState(data.chat_enabled, data.dm_enabled);
 

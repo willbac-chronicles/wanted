@@ -118,7 +118,8 @@
     upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/>',
     play: '<path d="M7 4l13 8-13 8V4z"/>',
-    camera: '<path d="M3 8h4l2-3h6l2 3h4v12H3V8z"/><circle cx="12" cy="13.5" r="3.5"/>'
+    camera: '<path d="M3 8h4l2-3h6l2 3h4v12H3V8z"/><circle cx="12" cy="13.5" r="3.5"/>',
+    book: '<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5v-15z"/><path d="M4 19.5A1.5 1.5 0 0 0 5.5 21H20v-3M8 7h8M8 11h6"/>'
   };
   function icon(name, cls) {
     return `<svg class="ico ${cls || ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;

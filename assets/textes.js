@@ -57,6 +57,85 @@
     fin_jeu: { a: "Le Père Noël a fait ses comptes", c: "Merci d'avoir balancé tes collègues." }
   };
 
+  // Onglet Règles. Les chiffres viennent des paramètres de la partie :
+  // {dispersion}, {manche}, {defi}, {immunite}, {gel}, {fenetre}, {pings_chasseur}, {ping_general},
+  // {capture}, {capture_subie}, {ping_manque}, {survivant}.
+  const REGLES = {
+    essentiel: {
+      a: "Règlement intérieur de l'atelier",
+      points: [
+        "Tu as une cible : trouve-la et exige son code à 4 chiffres.",
+        "D'autres lutins te chassent : reste caché, et donne ton code si on te démasque.",
+        "Envoie ta position à chaque ping.",
+        "Le lutin qui a le plus de points à la fin gagne l'estime du Père Noël."
+      ]
+    },
+    sections: [
+      { id: "securite", titre: "Sécurité et fair-play", a: "Clause non négociable du contrat",
+        points: [
+          "Respecte le code de la route : on ne court jamais sur la chaussée.",
+          "On n'entre ni dans les magasins ni dans les propriétés privées.",
+          "Visage toujours découvert.",
+          "On ne ment jamais sur son code.",
+          "Pars avec un téléphone chargé, et une batterie externe si tu peux.",
+          "En cas de souci, préviens l'organisation par le chat."
+        ] },
+      { id: "deroule", titre: "Déroulé", a: "Planning de la journée de grève",
+        points: [
+          "Dispersion : {dispersion} pour t'éloigner. Pas de cible, pas de capture.",
+          "Manche : {manche} de chasse, chacun reçoit une cible.",
+          "Regroupement : retour au point de rendez-vous, classement intermédiaire.",
+          "Deuxième manche avec de nouvelles cibles, puis classement final."
+        ] },
+      { id: "capturer", titre: "Capturer ta cible", a: "Procédure de dénonciation",
+        points: [
+          "Tu penses avoir trouvé ta cible ? Appuie sur « Wanted ! ». Elle est prévenue, mais ne sait pas qui tu es.",
+          "Approche-toi et demande-lui son code : tu as {defi} et 3 essais pour le saisir.",
+          "Code bon : +{capture} pour toi, et tu reçois une nouvelle cible.",
+          "Temps écoulé ou 3 codes faux : ta cible est protégée {immunite} et ton bouton est gelé {gel}."
+        ] },
+      { id: "repere", titre: "Quand on te repère", a: "Tu as été dénoncé",
+        points: [
+          "Ton téléphone sonne et affiche ton code : arrête-toi.",
+          "Donne ton code au lutin qui s'approche, honnêtement.",
+          "Capturé : {capture_subie}. Tu reçois un nouveau code et {immunite} de protection.",
+          "Une fois protégé, personne ne peut te repérer jusqu'à la fin de la protection."
+        ] },
+      { id: "pings", titre: "Pings de position", a: "Pointage obligatoire",
+        points: [
+          "Pings chasseur à {pings_chasseur} après le début : ton chasseur voit où tu es.",
+          "Ping général à {ping_general} : tout le monde voit tout le monde.",
+          "Tu as {fenetre} pour appuyer sur « Envoyer ma position ». Une notification te prévient 1 min avant.",
+          "Ping manqué : {ping_manque}."
+        ] },
+      { id: "points", titre: "Barème", a: "Grille des primes",
+        bareme: [
+          ["Capture", "+{capture}"],
+          ["Être capturé", "{capture_subie}"],
+          ["Ping manqué", "{ping_manque}"],
+          ["Bonus survivant (au moins 2 chasseurs sur toi à un ping, sans te faire prendre)", "+{survivant}"],
+          ["Quête validée", "selon la quête"],
+          ["Sortie du périmètre (montant décidé par l'organisation)", "−1 minimum"]
+        ] },
+      { id: "zone", titre: "Zone de jeu", a: "Les murs de l'atelier",
+        points: [
+          "Reste dans le périmètre tracé sur la carte de l'écran Jeu.",
+          "Une position envoyée hors zone est signalée à l'organisation : pénalité d'au moins −1 point."
+        ] },
+      { id: "quetes", titre: "Quêtes", a: "Heures supplémentaires",
+        points: [
+          "Des quêtes faciles, modérées ou difficiles rapportent des points en plus.",
+          "Réalise-la, appuie sur « J'ai réussi » et ajoute une photo de preuve.",
+          "L'organisation valide ou refuse. Une quête refusée peut être redéclarée."
+        ] },
+      { id: "aide", titre: "Un problème ?", a: "Bureau des réclamations",
+        points: [
+          "Écris à l'organisation dans l'onglet Chat (choisis « Organisation »).",
+          "Panne de téléphone ou de réseau : un ping manqué peut être corrigé par l'organisation."
+        ] }
+    ]
+  };
+
   // Motifs des avis de recherche. La base tire un numéro de 1 à 40 (jamais deux fois le même
   // pour un chasseur) : si tu changes le nombre de motifs, change aussi _assign_motif dans schema.sql.
   const MOTIFS = [
@@ -123,5 +202,5 @@
     return n >= 1 && n <= MOTIFS.length ? MOTIFS[n - 1] : null;
   }
 
-  window.TXT = { TEXTES, MOTIFS, T, line, fill, motif };
+  window.TXT = { TEXTES, MOTIFS, REGLES, T, line, fill, motif };
 })();

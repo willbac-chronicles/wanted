@@ -608,6 +608,7 @@
   $("tab-ico-jeu").innerHTML = icon("target");
   $("tab-ico-quetes").innerHTML = icon("flag");
   $("tab-ico-chat").innerHTML = icon("msg");
+  $("tab-ico-regles").innerHTML = icon("book");
 
   function showTabsBar(on) {
     $("player-tabs").classList.toggle("hidden", !on);
@@ -616,7 +617,8 @@
   function showTab(name) {
     tab = name;
     document.querySelectorAll("#player-tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
-    ["jeu", "quetes", "chat"].forEach(t => $("panel-" + t).classList.toggle("hidden", t !== name));
+    ["jeu", "quetes", "regles", "chat"].forEach(t => $("panel-" + t).classList.toggle("hidden", t !== name));
+    if (name === "regles") renderRules();
     window.scrollTo(0, 0);
     if (name === "jeu" && mapObj) setTimeout(() => mapObj.map.invalidateSize(), 50);
     updateTabs(true);
@@ -642,6 +644,49 @@
       setBadge("badge-chat", (c.unread || []).length ? "•" : "");
     }
     if (tab === "quetes" && (force || (!claimOpen && Date.now() - questsLoadedAt > 10000))) loadQuests();
+  }
+
+  // ---------- Règles ----------
+
+  // Durée lisible : 60 → « 1 min », 90 → « 1 min 30 », 45 → « 45 s ».
+  function dur(sec) {
+    sec = Math.round(Number(sec) || 0);
+    if (sec < 60) return sec + " s";
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return s ? `${m} min ${String(s).padStart(2, "0")}` : `${m} min`;
+  }
+  function listFr(arr) {
+    return arr.length > 1 ? arr.slice(0, -1).join(", ") + " et " + arr[arr.length - 1] : (arr[0] || "");
+  }
+  const mins = list => (list.length ? listFr(list.map(p => String(p.m))) + " min" : "—");
+  const rulesOpen = new Set(["securite"]);
+  function renderRules() {
+    const R = window.TXT.REGLES;
+    const g = (state && state.game) || {}, P = g.points || {}, r = g.rules || {};
+    const pings = r.pings || [];
+    const v = {
+      dispersion: dur((r.dispersion_minutes || 10) * 60), manche: dur((r.round_minutes || 60) * 60),
+      defi: dur(r.challenge_seconds || 60), immunite: dur(r.immunity_seconds || g.immunity_seconds || 120),
+      gel: dur(r.cooldown_seconds || 120), fenetre: dur(r.ping_window_seconds || 60),
+      pings_chasseur: mins(pings.filter(p => p.kind === "chasseur")),
+      ping_general: mins(pings.filter(p => p.kind === "general")),
+      capture: P.capture, capture_subie: "−" + P.captured, ping_manque: "−" + P.missed_ping, survivant: P.survivor
+    };
+    const f = s => esc(window.TXT.fill(s, v));
+    $("rules").innerHTML = `
+      <div class="card rules-key">
+        <h2>${icon("book")} ${f(R.essentiel.a)}</h2>
+        <ul class="rules-list">${R.essentiel.points.map(p => `<li>${f(p)}</li>`).join("")}</ul>
+      </div>
+      ${R.sections.map(s => `
+        <details class="card rules-sec" data-rule="${s.id}"${rulesOpen.has(s.id) ? " open" : ""}>
+          <summary><span class="grow"><b>${f(s.titre)}</b><span class="hint">${f(s.a)}</span></span></summary>
+          ${s.points ? `<ul class="rules-list">${s.points.map(p => `<li>${f(p)}</li>`).join("")}</ul>` : ""}
+          ${s.bareme ? `<table class="rules-table">${s.bareme.map(([k, val]) => `<tr><td>${f(k)}</td><td class="num">${f(val)}</td></tr>`).join("")}</table>` : ""}
+        </details>`).join("")}`;
+    $("rules").querySelectorAll("details").forEach(d => {
+      d.ontoggle = () => { if (d.open) rulesOpen.add(d.dataset.rule); else rulesOpen.delete(d.dataset.rule); };
+    });
   }
 
   // ---------- Quêtes ----------
