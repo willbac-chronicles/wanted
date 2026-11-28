@@ -389,14 +389,14 @@ begin
   -- Import groupé depuis un tableau : une seule notification, doublons et joueurs inconnus ignorés.
   delete from public.push_jobs where kind = 'quete';
   r := public.org_import_quests(jsonb_build_array(
-    jsonb_build_object('title', '__test_import A', 'points', 2, 'difficulty', 'moderee', 'photo_required', true),
+    jsonb_build_object('title', '__test_import A', 'points', 2, 'difficulty', 'moderee', 'proof', 'video'),
     jsonb_build_object('title', '__test_import B', 'points', 3, 'difficulty', 'difficile', 'round', 2),
     jsonb_build_object('title', '__TEST_IMPORT A', 'points', 1),
     jsonb_build_object('title', '__test_import C', 'player', '__personne__'),
     jsonb_build_object('title', 'Avec photo', 'points', 1)), false, false);
   insert into _report(test, ok, detail) values ('import de quêtes : 2 créées, 3 ignorées',
     (r->>'created')::int = 2 and json_array_length(r->'skipped') = 3
-    and (select difficulty = 'moderee' and photo_required and points = 2 from public.quests where title = '__test_import A')
+    and (select difficulty = 'moderee' and photo_required and proof = 'video' and points = 2 from public.quests where title = '__test_import A')
     and (select round = 2 from public.quests where title = '__test_import B'), r::text);
   insert into _report(test, ok, detail) values ('import de quêtes : une seule notification',
     (select count(*) from public.push_jobs where kind = 'quete') = 1,
@@ -437,6 +437,21 @@ begin
   exception when others then
     insert into _report(test, ok) values ('preuve : fichier non vidéo refusé', true);
   end;
+  -- Quête « photo seulement » : la vidéo est refusée ; « vidéo seulement » : la photo est refusée.
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_save_quest(v_quest, 'Avec photo', '', 1, null, null, true, null, 'difficile', 'photo');
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
+  begin
+    perform public.claim_quest(v_quest, 'vidéo', 'quests/' || u[1] || '/testvideo01.mp4');
+    insert into _report(test, ok) values ('preuve « photo » : vidéo refusée', false);
+  exception when others then
+    insert into _report(test, ok) values ('preuve « photo » : vidéo refusée', true);
+  end;
+  perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
+  perform public.org_save_quest(v_quest, 'Avec photo', '', 1, null, null, true, null, 'difficile', 'video');
+  insert into _report(test, ok) values ('preuve « vidéo » enregistrée',
+    (select proof = 'video' and photo_required from public.quests where id = v_quest));
+  perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
   r := public.claim_quest(v_quest, 'vidéo', 'quests/' || u[1] || '/testvideo01.mp4');
   insert into _report(test, ok) values ('preuve : vidéo acceptée',
     (select photo_path like '%.mp4' from public.quest_claims where quest_id = v_quest and player_id = pid[1]));

@@ -270,6 +270,17 @@ alter table public.chat_messages add constraint chat_messages_body_check
 create index if not exists chat_messages_to_player on public.chat_messages(to_player) where to_player is not null;
 alter table public.games add column if not exists dm_enabled boolean not null default true;
 alter table public.quests add column if not exists photo_required boolean not null default false;
+-- v12 : preuve demandée par quête : aucune (facultative), photo, vidéo, ou photo ou vidéo.
+-- photo_required reste tenu à jour (= une preuve est exigée) pour les anciennes pages.
+alter table public.quests add column if not exists proof text;
+update public.quests set proof = case when photo_required then 'photo_video' else 'aucune' end where proof is null;
+alter table public.quests alter column proof set default 'aucune';
+alter table public.quests alter column proof set not null;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'quests_proof_check') then
+    alter table public.quests add constraint quests_proof_check check (proof in ('aucune', 'photo', 'video', 'photo_video'));
+  end if;
+end $$;
 alter table public.quest_claims add column if not exists photo_path text;
 -- v8 : message de refus d'une déclaration de quête.
 alter table public.quest_claims add column if not exists refusal_reason text
@@ -1737,10 +1748,12 @@ end $$;
 
 drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean);
 drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean, boolean);
+drop function if exists public.org_save_quest(bigint, text, text, int, uuid, int, boolean, boolean, text);
 create or replace function public.org_save_quest(p_id bigint, p_title text, p_description text,
                                                  p_points int, p_player uuid, p_round int, p_active boolean,
                                                  p_photo_required boolean default null,
-                                                 p_difficulty text default null)
+                                                 p_difficulty text default null,
+                                                 p_proof text default null)
 returns bigint language plpgsql volatile security definer
 set search_path = public
 as $$
@@ -1750,16 +1763,25 @@ begin
   if p_difficulty is not null and p_difficulty not in ('facile', 'moderee', 'difficile') then
     raise exception 'Difficulté invalide';
   end if;
+  -- Ancienne page (case « photo obligatoire ») : oui = photo ou vidéo, non = aucune.
+  if p_proof is null and p_photo_required is not null then
+    p_proof := case when p_photo_required then 'photo_video' else 'aucune' end;
+  end if;
+  if p_proof is not null and p_proof not in ('aucune', 'photo', 'video', 'photo_video') then
+    raise exception 'Type de preuve invalide';
+  end if;
   if v_new then
-    insert into public.quests(title, description, points, player_id, round, active, photo_required, difficulty)
+    insert into public.quests(title, description, points, player_id, round, active, photo_required, proof, difficulty)
     values (trim(p_title), coalesce(trim(p_description), ''), coalesce(p_points, 1), p_player, p_round,
-            coalesce(p_active, true), coalesce(p_photo_required, false), coalesce(p_difficulty, 'facile'))
+            coalesce(p_active, true), coalesce(p_proof, 'aucune') <> 'aucune', coalesce(p_proof, 'aucune'),
+            coalesce(p_difficulty, 'facile'))
     returning id into v_id;
   else
     update public.quests
        set title = trim(p_title), description = coalesce(trim(p_description), ''),
            points = coalesce(p_points, points), player_id = p_player, round = p_round,
-           active = coalesce(p_active, active), photo_required = coalesce(p_photo_required, photo_required),
+           active = coalesce(p_active, active), proof = coalesce(p_proof, proof),
+           photo_required = coalesce(p_proof, proof) <> 'aucune',
            difficulty = coalesce(p_difficulty, difficulty)
      where id = p_id returning id into v_id;
     if v_id is null then raise exception 'Quête introuvable'; end if;
@@ -1772,7 +1794,8 @@ begin
 end $$;
 
 -- Import de quêtes depuis un tableau (Google Sheet, Excel, CSV), en un seul appel.
--- Lignes : title, description, points, difficulty, photo_required, player (pseudo ou vide), round, active.
+-- Lignes : title, description, points, difficulty, proof (aucune, photo, video, photo_video ; à défaut photo_required),
+-- player (pseudo ou vide), round, active.
 -- Titre déjà présent (sans tenir compte des majuscules) : mis à jour si p_update, sinon ignoré.
 -- Une seule notification aux joueurs pour l'ensemble des nouvelles quêtes (pas une par quête).
 -- p_sync (par défaut, y compris pour une page organisateur restée ouverte sur une ancienne version) : le tableau fait foi. Les quêtes dont le titre n'est ni dans le tableau ni dans p_keep
@@ -1786,7 +1809,7 @@ as $$
 declare
   r jsonb; v_line int := 0;
   v_title text; v_desc text; v_points int; v_diff text; v_photo boolean; v_round int; v_active boolean;
-  v_pseudo text; v_player uuid; v_id bigint; v_existing bigint;
+  v_pseudo text; v_player uuid; v_id bigint; v_existing bigint; v_proof text;
   v_created int := 0; v_updated int := 0;
   v_skipped jsonb := '[]'::jsonb;
   v_new_all int := 0;
@@ -1834,7 +1857,13 @@ begin
       v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'manche inconnue');
       continue;
     end if;
-    v_photo := coalesce((r->>'photo_required')::boolean, false);
+    v_proof := coalesce(nullif(r->>'proof', ''),
+                        case when coalesce((r->>'photo_required')::boolean, false) then 'photo_video' else 'aucune' end);
+    if v_proof not in ('aucune', 'photo', 'video', 'photo_video') then
+      v_skipped := v_skipped || jsonb_build_object('ligne', v_line, 'titre', v_title, 'motif', 'preuve inconnue');
+      continue;
+    end if;
+    v_photo := v_proof <> 'aucune';
     v_active := coalesce((r->>'active')::boolean, true);
     v_pseudo := nullif(trim(coalesce(r->>'player', '')), '');
     v_player := null;
@@ -1854,12 +1883,12 @@ begin
       end if;
       update public.quests
          set title = v_title, description = v_desc, points = v_points, difficulty = v_diff,
-             photo_required = v_photo, player_id = v_player, round = v_round, active = v_active
+             photo_required = v_photo, proof = v_proof, player_id = v_player, round = v_round, active = v_active
        where id = v_existing;
       v_updated := v_updated + 1;
     else
-      insert into public.quests(title, description, points, player_id, round, active, photo_required, difficulty)
-      values (v_title, v_desc, v_points, v_player, v_round, v_active, v_photo, v_diff)
+      insert into public.quests(title, description, points, player_id, round, active, photo_required, proof, difficulty)
+      values (v_title, v_desc, v_points, v_player, v_round, v_active, v_photo, v_proof, v_diff)
       returning id into v_id;
       v_created := v_created + 1;
       if v_active then
@@ -1919,7 +1948,7 @@ begin
   perform public._require_org();
   return json_build_object(
     'quests', (select coalesce(json_agg(x order by x.id desc), '[]'::json) from (
-      select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at, q.photo_required,
+      select q.id, q.title, q.description, q.points, q.player_id, q.round, q.active, q.created_at, q.photo_required, q.proof,
              q.difficulty,
              (select pseudo from public.players where id = q.player_id) as for_player,
              (select count(*) from public.quest_claims c where c.quest_id = q.id and c.status = 'validee') as done
@@ -1975,7 +2004,7 @@ begin
   select * into g from public.games where id = 1;
   return (select coalesce(json_agg(x order by x.done, x.id desc), '[]'::json) from (
     select q.id, q.title, q.description, q.points, q.round, (q.player_id is not null) as personal,
-           q.photo_required, q.difficulty, c.status, c.note, (c.photo_path is not null) as has_photo,
+           q.photo_required, q.proof, q.difficulty, c.status, c.note, (c.photo_path is not null) as has_photo,
            case when c.status = 'refusee' then c.refusal_reason end as reason,
            (c.status = 'validee') is true as done
       from public.quests q
@@ -1997,7 +2026,16 @@ begin
   select * into c from public.quest_claims where quest_id = q.id and player_id = v_me;
   if c.status = 'validee' then return json_build_object('ok', true, 'already', true); end if;
   p_photo := nullif(trim(coalesce(p_photo, '')), '');
-  if q.photo_required and p_photo is null then raise exception 'Photo ou vidéo obligatoire pour cette quête'; end if;
+  if p_photo is null and q.proof <> 'aucune' then
+    raise exception '% obligatoire pour cette quête',
+      case q.proof when 'photo' then 'Photo' when 'video' then 'Vidéo' else 'Photo ou vidéo' end;
+  end if;
+  if p_photo is not null and q.proof = 'photo' and p_photo !~ '\.jpg$' then
+    raise exception 'Cette quête demande une photo, pas une vidéo';
+  end if;
+  if p_photo is not null and q.proof = 'video' and p_photo ~ '\.jpg$' then
+    raise exception 'Cette quête demande une vidéo, pas une photo';
+  end if;
   if p_photo is not null and not public._media_ok(p_photo, 'quests', array['jpg', 'mp4', 'mov', 'webm', '3gp']) then
     raise exception 'Photo ou vidéo introuvable : réessaie';
   end if;

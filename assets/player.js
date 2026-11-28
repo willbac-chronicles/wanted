@@ -692,6 +692,11 @@
   // ---------- Quêtes ----------
 
   const VIDEO_MAX_MB = 50; // limite d'un fichier sur le plan gratuit de Supabase
+  // Preuve demandée par quête (une ancienne quête sans « proof » suit photo_required).
+  const proofOf = q => q.proof || (q.photo_required ? "photo_video" : "aucune");
+  const PROOF_BADGE = { photo: "Photo obligatoire", video: "Vidéo obligatoire", photo_video: "Preuve obligatoire : photo ou vidéo" };
+  const PROOF_HINT = { aucune: "Preuve conseillée : une photo ou une vidéo.", photo: "Preuve obligatoire : une photo.",
+                       video: "Preuve obligatoire : une vidéo.", photo_video: "Preuve obligatoire : une photo ou une vidéo." };
   const QUEST_STATE = {
     en_attente: `<span class="badge blue">${icon("clock")} En attente de validation</span>`,
     validee: `<span class="badge green">${icon("check")} Validée</span>`,
@@ -743,7 +748,7 @@
           </div>
           ${q.description ? `<p style="margin-top:8px">${esc(q.description)}</p>` : ""}
           <p class="small muted">${q.personal ? "Quête personnelle" : "Pour tout le monde"}${q.round ? " · manche " + q.round : ""}</p>
-          ${q.photo_required ? `<p class="small"><span class="badge plain">${icon("camera")} Preuve obligatoire : photo ou vidéo</span></p>` : ""}
+          ${PROOF_BADGE[proofOf(q)] ? `<p class="small"><span class="badge plain">${icon(proofOf(q) === "video" ? "video" : "camera")} ${PROOF_BADGE[proofOf(q)]}</span></p>` : ""}
           ${q.status ? `<p>${QUEST_STATE[q.status]}${q.has_photo && q.status !== "refusee" ? ` <span class="badge plain">${icon("camera")} preuve envoyée</span>` : ""}</p>` : ""}
           ${q.status === "refusee" && q.reason ? `<p class="small quest-reason"><b>Motif :</b> ${esc(q.reason)}</p>` : ""}
           ${!q.status || q.status === "refusee" ? `
@@ -751,17 +756,17 @@
             <div class="claim-form hidden" data-form="${q.id}">
               <label for="qn-${q.id}">Un mot pour l'organisation (facultatif)</label>
               <textarea id="qn-${q.id}" maxlength="300" rows="2" placeholder="Comment as-tu réussi ?"></textarea>
-              <p class="small muted" style="margin:8px 0 0">${q.photo_required ? "Preuve obligatoire :" : "Preuve conseillée :"} une photo ou une vidéo (${VIDEO_MAX_MB} Mo au plus, 30 secondes suffisent).</p>
+              <p class="small muted" style="margin:8px 0 0">${PROOF_HINT[proofOf(q)]}${proofOf(q) !== "photo" ? ` Vidéo : ${VIDEO_MAX_MB} Mo au plus, 30 secondes suffisent.` : ""}</p>
               <div class="row" style="margin-top:6px">
-                <label class="btn">${icon("camera")} Photo
-                  <input type="file" accept="image/*" capture="environment" class="hidden" data-photo="${q.id}" /></label>
-                <label class="btn">${icon("video")} Vidéo
-                  <input type="file" accept="video/*" class="hidden" data-video="${q.id}" /></label>
+                ${proofOf(q) !== "video" ? `<label class="btn">${icon("camera")} Photo
+                  <input type="file" accept="image/*" capture="environment" class="hidden" data-photo="${q.id}" /></label>` : ""}
+                ${proofOf(q) !== "photo" ? `<label class="btn">${icon("video")} Vidéo
+                  <input type="file" accept="video/*" class="hidden" data-video="${q.id}" /></label>` : ""}
               </div>
               <img class="proof hidden" alt="Aperçu de la photo" data-preview="${q.id}" />
               <video class="proof hidden" controls playsinline preload="metadata" data-vpreview="${q.id}"></video>
               <div class="row" style="margin-top:8px">
-                <button class="green" data-send="${q.id}" data-required="${q.photo_required ? 1 : 0}">${icon("send")} Envoyer la déclaration</button>
+                <button class="green" data-send="${q.id}" data-required="${proofOf(q) !== "aucune" ? 1 : 0}">${icon("send")} Envoyer la déclaration</button>
                 <button data-cancel="${q.id}">Annuler</button>
               </div>
             </div>` : ""}
@@ -811,7 +816,7 @@
     if (!b) return;
     const id = Number(b.dataset.send);
     const photo = proofs.get(id);
-    if (b.dataset.required === "1" && !photo) return toast("Ajoute d'abord une photo ou une vidéo de preuve.", "red");
+    if (b.dataset.required === "1" && !photo) return toast("Ajoute d'abord la preuve demandée.", "red");
     b.disabled = true;
     try {
       let path = null;

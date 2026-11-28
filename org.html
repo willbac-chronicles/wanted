@@ -170,20 +170,21 @@
             <div style="flex:1 1 160px"><label for="q-difficulty">Difficulté</label>
               <select id="q-difficulty"><option value="facile">Facile</option><option value="moderee">Modérée</option><option value="difficile">Difficile</option></select></div>
             <div style="flex:0 1 160px"><label><input type="checkbox" id="q-active" checked /> Visible des joueurs</label></div>
-            <div style="flex:0 1 160px"><label><input type="checkbox" id="q-photo" /> Preuve obligatoire (photo ou vidéo)</label></div>
+            <div style="flex:1 1 180px"><label for="q-proof">Preuve demandée</label>
+              <select id="q-proof"><option value="aucune">Aucune (facultative)</option><option value="photo">Photo</option><option value="video">Vidéo</option><option value="photo_video">Photo ou vidéo</option></select></div>
           </div>
           <p></p>
           <div class="row">
             <button class="primary" id="q-save">Créer la quête</button>
             <button id="q-cancel" class="hidden">Annuler la modification</button>
           </div>
-          <p class="small muted">Les joueurs concernés reçoivent une notification à la création. Ils déclarent la quête faite, avec une photo de preuve ; tu valides (points ajoutés) ou refuses ci-dessous, avec un message si tu veux. Une quête refusée peut être redéclarée.</p>
+          <p class="small muted">Les joueurs concernés reçoivent une notification à la création. Ils déclarent la quête faite, avec la preuve demandée (photo, vidéo, ou au choix) ; tu valides (points ajoutés) ou refuses ci-dessous, avec un message si tu veux. Une quête refusée peut être redéclarée.</p>
         </section>
 
         <section class="card">
           <h2>Importer des quêtes</h2>
           <p class="small muted">Depuis un Google Sheet partagé en lecture (« Toute personne disposant du lien »), ou depuis un fichier Excel, LibreOffice ou CSV. Le tableau fait foi : chaque import crée les nouvelles quêtes, met à jour celles de même titre et supprime celles qui n'y sont plus.
-            Colonnes : <b>Titre</b>, Description, Points, Difficulté (facile, modérée, difficile), Photo obligatoire (oui/non : une photo ou une vidéo est alors exigée), Pour (pseudo, vide = tout le monde), Manche (1, 2, vide = toutes), Visible (oui/non).
+            Colonnes : <b>Titre</b>, Description, Points, Difficulté (facile, modérée, difficile), Preuve (aucune, photo, vidéo, photo ou vidéo), Pour (pseudo, vide = tout le monde), Manche (1, 2, vide = toutes), Visible (oui/non).
             Seul le titre est obligatoire.</p>
           <label for="qi-url">Lien du Google Sheet</label>
           <div class="row">
@@ -248,6 +249,6 @@
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=1.9"></script>
+  <script src="assets/org.js?v=2.0"></script>
 </body>
 </html>

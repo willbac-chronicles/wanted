@@ -500,6 +500,8 @@
   let questData = { quests: [], claims: [] };
   const CLAIM_LABELS = { en_attente: "à traiter", validee: "validée", refusee: "refusée" };
   const DIFF_LABELS = { facile: "Facile", moderee: "Modérée", difficile: "Difficile" };
+  const PROOF_EXPORT = { aucune: "aucune", photo: "photo", video: "vidéo", photo_video: "photo ou vidéo" };
+  const PROOF_LIST = { photo: " · photo exigée", video: " · vidéo exigée", photo_video: " · photo ou vidéo exigée" };
 
   // Formulaire de refus ouvert : pas de rechargement automatique, pour ne pas perdre le motif saisi.
   let refusing = 0;
@@ -585,7 +587,7 @@
           <div class="row">
             <div class="grow"><b>${esc(q.title)}</b> <span class="badge gold">${esc((q.points > 0 ? "+" : "") + q.points)} pt</span>
               <span class="badge plain">${esc(DIFF_LABELS[q.difficulty] || "Facile")}</span>
-              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${q.photo_required ? " · preuve obligatoire" : ""}${q.active ? "" : " · masquée"}</span>
+              <span class="small muted">· ${q.for_player ? "pour " + esc(q.for_player) : "tout le monde"} · ${q.round ? "manche " + q.round : "toutes manches"} · ${esc(q.done)} validée(s)${PROOF_LIST[q.proof] || ""}${q.active ? "" : " · masquée"}</span>
               ${q.description ? `<div class="small">${esc(q.description)}</div>` : ""}</div>
             <button class="small" data-q="edit" data-id="${q.id}">Modifier</button>
             <button class="small" data-q="toggle" data-id="${q.id}">${q.active ? "Masquer" : "Afficher"}</button>
@@ -597,7 +599,7 @@
 
   function resetQuestForm() {
     $("q-id").value = ""; $("q-title").value = ""; $("q-desc").value = ""; $("q-points").value = "1";
-    $("q-player").value = ""; $("q-round").value = ""; $("q-active").checked = true; $("q-photo").checked = false;
+    $("q-player").value = ""; $("q-round").value = ""; $("q-active").checked = true; $("q-proof").value = "aucune";
     $("q-difficulty").value = "facile";
     $("quest-form-title").textContent = "Nouvelle quête";
     $("q-save").textContent = "Créer la quête";
@@ -615,7 +617,7 @@
         p_player: $("q-player").value || null,
         p_round: $("q-round").value ? Number($("q-round").value) : null,
         p_active: $("q-active").checked,
-        p_photo_required: $("q-photo").checked,
+        p_proof: $("q-proof").value,
         p_difficulty: $("q-difficulty").value
       });
       toast($("q-id").value ? "Quête modifiée." : "Quête créée.", "ok");
@@ -635,7 +637,7 @@
     if (b.dataset.q === "edit") {
       $("q-id").value = q.id; $("q-title").value = q.title; $("q-desc").value = q.description || "";
       $("q-points").value = q.points; $("q-player").value = q.player_id || ""; $("q-round").value = q.round || "";
-      $("q-active").checked = q.active; $("q-photo").checked = !!q.photo_required;
+      $("q-active").checked = q.active; $("q-proof").value = q.proof || (q.photo_required ? "photo_video" : "aucune");
       $("q-difficulty").value = q.difficulty || "facile";
       $("quest-form-title").textContent = "Modifier la quête";
       $("q-save").textContent = "Enregistrer";
@@ -658,27 +660,37 @@
 
   // ---------- Import de quêtes (Google Sheet, Excel, CSV) ----------
 
-  const QI_COLS = ["Titre", "Description", "Points", "Difficulté", "Photo obligatoire", "Pour", "Manche", "Visible"];
+  const QI_COLS = ["Titre", "Description", "Points", "Difficulté", "Preuve", "Pour", "Manche", "Visible"];
   // Modèle téléchargeable, pré-rempli avec des idées de quêtes (à modifier librement).
   const QI_TEMPLATE = [
-    ["Selfie devant un sapin", "Un selfie devant un sapin décoré.", 1, "facile", "oui", "", "", "oui"],
-    ["Vitrine de Noël", "Photo d'une vitrine décorée pour Noël.", 1, "facile", "oui", "", "", "oui"],
-    ["Chasse à l'étoile", "Trouve une étoile : décoration, enseigne, motif…", 1, "facile", "oui", "", "", "oui"],
-    ["Graffiti de grève", "Écris « GRÈVE » avec ce que tu trouves par terre (feuilles, cailloux…).", 1, "facile", "oui", "", "", "oui"],
-    ["Guirlande allumée", "Photo d'une guirlande lumineuse allumée.", 1, "facile", "oui", "", "", "oui"],
-    ["Selfie entre collègues", "Selfie avec un autre joueur, chasseur ou cible.", 2, "modérée", "oui", "", "", "oui"],
-    ["Repérer le patron", "Trouve un Père Noël : figurine, affiche ou décor.", 2, "modérée", "oui", "", "", "oui"],
-    ["Renne de fortune", "Reconstitue un renne avec des objets trouvés.", 2, "modérée", "oui", "", "", "oui"],
-    ["Trois couleurs", "Trois décorations de couleurs différentes sur une même photo.", 2, "modérée", "oui", "", "", "oui"],
-    ["Plaque à prénom", "Photo d'un panneau de rue qui contient un prénom.", 2, "modérée", "oui", "", "", "oui"],
-    ["Filature", "Photo de ta cible sans qu'elle te voie. Elle doit être reconnaissable.", 4, "difficile", "oui", "", "", "oui"],
-    ["Pétition des lutins", "Fais signer une « pétition des lutins en grève » par 5 passants volontaires.", 3, "difficile", "oui", "", "", "oui"],
-    ["Soutien des commerçants", "Un commerçant pose avec ton bonnet ou ton panneau de lutin (avec son accord).", 3, "difficile", "oui", "", "", "oui"],
-    ["Assemblée générale", "Photo de groupe d'au moins 4 joueurs.", 3, "difficile", "oui", "", "", "oui"],
-    ["Chorale clandestine", "Fais deviner un chant de Noël à un passant en le fredonnant, puis photo avec lui (avec son accord).", 3, "difficile", "oui", "", "", "oui"]
+    ["Selfie devant un sapin", "Un selfie devant un sapin décoré.", 1, "facile", "photo", "", "", "oui"],
+    ["Vitrine de Noël", "Photo d'une vitrine décorée pour Noël.", 1, "facile", "photo", "", "", "oui"],
+    ["Chasse à l'étoile", "Trouve une étoile : décoration, enseigne, motif…", 1, "facile", "photo", "", "", "oui"],
+    ["Graffiti de grève", "Écris « GRÈVE » avec ce que tu trouves par terre (feuilles, cailloux…).", 1, "facile", "photo", "", "", "oui"],
+    ["Guirlande allumée", "Photo d'une guirlande lumineuse allumée.", 1, "facile", "photo", "", "", "oui"],
+    ["Selfie entre collègues", "Selfie avec un autre joueur, chasseur ou cible.", 2, "modérée", "photo", "", "", "oui"],
+    ["Repérer le patron", "Trouve un Père Noël : figurine, affiche ou décor.", 2, "modérée", "photo", "", "", "oui"],
+    ["Renne de fortune", "Reconstitue un renne avec des objets trouvés.", 2, "modérée", "photo", "", "", "oui"],
+    ["Trois couleurs", "Trois décorations de couleurs différentes sur une même photo.", 2, "modérée", "photo", "", "", "oui"],
+    ["Plaque à prénom", "Photo d'un panneau de rue qui contient un prénom.", 2, "modérée", "photo", "", "", "oui"],
+    ["Filature", "Photo de ta cible sans qu'elle te voie. Elle doit être reconnaissable.", 4, "difficile", "photo", "", "", "oui"],
+    ["Pétition des lutins", "Fais signer une « pétition des lutins en grève » par 5 passants volontaires.", 3, "difficile", "photo", "", "", "oui"],
+    ["Soutien des commerçants", "Un commerçant pose avec ton bonnet ou ton panneau de lutin (avec son accord).", 3, "difficile", "photo", "", "", "oui"],
+    ["Assemblée générale", "Photo de groupe d'au moins 4 joueurs.", 3, "difficile", "photo", "", "", "oui"],
+    ["Chorale clandestine", "Fais deviner un chant de Noël à un passant en le fredonnant, filme la scène (avec son accord).", 3, "difficile", "vidéo", "", "", "oui"]
   ];
   let qiRows = null;
   const normTxt = v => String(v == null ? "" : v).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  // Preuve : aucune, photo, vidéo, photo ou vidéo (« oui » des anciens tableaux = photo ou vidéo).
+  const proofOf = v => {
+    const t = normTxt(v);
+    if (t === "" || /^(aucune?|non|n|no|faux|false|0|-|facultative?)$/.test(t)) return "aucune";
+    const ph = /photo/.test(t), vi = /vid/.test(t);
+    if ((ph && vi) || /^(oui|o|yes|y|x|vrai|true|1|les deux|au choix)$/.test(t)) return "photo_video";
+    if (ph) return "photo";
+    if (vi) return "video";
+    return null;
+  };
   const yes = v => { const t = normTxt(v); return t === "" ? null : /^(oui|o|yes|y|x|vrai|true|1)$/.test(t) ? true : /^(non|n|no|faux|false|0)$/.test(t) ? false : "?"; };
 
   // Lit la matrice du tableau : repère les colonnes par leur en-tête (sinon ordre du modèle).
@@ -688,7 +700,7 @@
     const head = lines[0].map(normTxt);
     const find = re => head.findIndex(h => re.test(h));
     let idx = { title: find(/^titre|^quete|^nom|^title/), description: find(/^desc/), points: find(/^point|^pts/),
-                difficulty: find(/^diff|^niveau/), photo: find(/photo/), player: find(/^pour|^joueur|^destinataire/),
+                difficulty: find(/^diff|^niveau/), photo: find(/^preuve|photo|video/), player: find(/^pour|^joueur|^destinataire/),
                 round: find(/^manche|^round/), active: find(/^visible|^actif|^active/) };
     let body = lines.slice(1);
     if (idx.title < 0) { idx = { title: 0, description: 1, points: 2, difficulty: 3, photo: 4, player: 5, round: 6, active: 7 }; body = lines; }
@@ -704,8 +716,8 @@
       const d = normTxt(cell(r, "difficulty"));
       const difficulty = d === "" ? "facile" : /^fac/.test(d) ? "facile" : /^(mod|moy|inter)/.test(d) ? "moderee" : /^(dif|dur)/.test(d) ? "difficile" : null;
       if (!difficulty) errs.push("difficulté inconnue");
-      const photo = yes(cell(r, "photo")), active = yes(cell(r, "active"));
-      if (photo === "?") errs.push("photo : oui ou non");
+      const proof = proofOf(cell(r, "photo")), active = yes(cell(r, "active"));
+      if (!proof) errs.push("preuve : aucune, photo, vidéo ou photo ou vidéo");
       if (active === "?") errs.push("visible : oui ou non");
       const rr = normTxt(cell(r, "round")).replace(/^manche\s*/, "");
       const round = rr === "" || /^tout/.test(rr) ? null : Number(rr);
@@ -713,7 +725,7 @@
       const pl = cell(r, "player");
       const player = /^(tous|tout le monde|everyone)$/i.test(pl.trim()) ? "" : pl;
       return { line: i + 1, title, description: cell(r, "description").slice(0, 1000), points, difficulty,
-               photo_required: photo === true, player, round, active: active !== false, errs };
+               proof, player, round, active: active !== false, errs };
     });
   }
 
@@ -734,9 +746,9 @@
       <div class="card info" style="margin-top:12px">
         <h3>${icon("upload")} ${qiRows.length} ligne(s) lue(s) dans ${esc(source)}</h3>
         <div class="table-wrap"><table>
-          <thead><tr><th>Titre</th><th>Pts</th><th>Difficulté</th><th>Photo</th><th>Pour</th><th>Manche</th><th>État</th></tr></thead>
+          <thead><tr><th>Titre</th><th>Pts</th><th>Difficulté</th><th>Preuve</th><th>Pour</th><th>Manche</th><th>État</th></tr></thead>
           <tbody>${qiRows.map(r => `<tr><td>${esc(r.title || "—")}${r.active ? "" : " <span class=\"small muted\">(masquée)</span>"}</td><td>${esc(r.points)}</td>
-            <td>${esc(DIFF_LABELS[r.difficulty] || "—")}</td><td>${r.photo_required ? "oui" : "non"}</td><td>${esc(r.player || "tous")}</td>
+            <td>${esc(DIFF_LABELS[r.difficulty] || "—")}</td><td>${esc(PROOF_EXPORT[r.proof] || "—")}</td><td>${esc(r.player || "tous")}</td>
             <td>${esc(r.round || "toutes")}</td><td>${state(r)}</td></tr>`).join("")}</tbody>
         </table></div>
         ${gone.length ? `<div class="claim refusee" style="margin-top:10px">
@@ -798,7 +810,7 @@
       if (!questData.quests.length) { toast("Aucune quête à exporter.", "red"); return; }
       const rows = questData.quests.slice().sort((a, b) => a.id - b.id).map(q => [
         q.title, q.description || "", q.points, DIFF_EXPORT[q.difficulty] || "facile",
-        q.photo_required ? "oui" : "non", q.for_player || "", q.round || "", q.active ? "oui" : "non"]);
+        PROOF_EXPORT[q.proof] || (q.photo_required ? "photo ou vidéo" : "aucune"), q.for_player || "", q.round || "", q.active ? "oui" : "non"]);
       downloadCsv("wanted-quetes.csv", [QI_COLS, ...rows]);
     } catch (e) { toast(e.message, "red"); }
   };
@@ -806,7 +818,7 @@
   async function doQuestImport() {
     const rows = qiRows.filter(r => !r.errs.length).map(r => ({
       title: r.title, description: r.description, points: r.points, difficulty: r.difficulty,
-      photo_required: r.photo_required, player: r.player, round: r.round, active: r.active }));
+      proof: r.proof, player: r.player, round: r.round, active: r.active }));
     $("qi-go").disabled = true;
     try {
       const keep = qiRows.filter(r => r.errs.length && r.title).map(r => r.title);
