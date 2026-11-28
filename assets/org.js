@@ -715,6 +715,19 @@
 
   $("qi-template").onclick = () => downloadCsv("wanted-modele-quetes.csv", [QI_COLS, ...QI_TEMPLATE]);
 
+  // Export des quêtes existantes, au format du modèle (réimportable tel quel).
+  const DIFF_EXPORT = { facile: "facile", moderee: "modérée", difficile: "difficile" };
+  $("qi-export").onclick = async () => {
+    try {
+      questData = await rpc("org_get_quests");
+      if (!questData.quests.length) { toast("Aucune quête à exporter.", "red"); return; }
+      const rows = questData.quests.slice().sort((a, b) => a.id - b.id).map(q => [
+        q.title, q.description || "", q.points, DIFF_EXPORT[q.difficulty] || "facile",
+        q.photo_required ? "oui" : "non", q.for_player || "", q.round || "", q.active ? "oui" : "non"]);
+      downloadCsv("wanted-quetes.csv", [QI_COLS, ...rows]);
+    } catch (e) { toast(e.message, "red"); }
+  };
+
   async function doQuestImport() {
     const rows = qiRows.filter(r => !r.errs.length).map(r => ({
       title: r.title, description: r.description, points: r.points, difficulty: r.difficulty,
