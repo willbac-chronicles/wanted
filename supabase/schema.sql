@@ -1999,7 +1999,7 @@ begin
   p_photo := nullif(trim(coalesce(p_photo, '')), '');
   if q.photo_required and p_photo is null then raise exception 'Photo ou vidéo obligatoire pour cette quête'; end if;
   if p_photo is not null and not public._media_ok(p_photo, 'quests', array['jpg', 'mp4', 'mov', 'webm', '3gp']) then
-    raise exception 'Photo introuvable : réessaie';
+    raise exception 'Photo ou vidéo introuvable : réessaie';
   end if;
   insert into public.quest_claims(quest_id, player_id, note, photo_path)
   values (q.id, v_me, nullif(left(trim(coalesce(p_note, '')), 300), ''), p_photo)

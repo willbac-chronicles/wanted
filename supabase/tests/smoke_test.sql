@@ -429,22 +429,22 @@ begin
     insert into _report(test, ok) values ('quête à photo obligatoire refusée sans photo', true);
   end;
   -- Vidéo de preuve : acceptée (mp4) ; un autre type de fichier est refusé.
-  insert into storage.objects(bucket_id, name) values ('media', 'quests/' || u[1] || '/__testvideo01.mp4'),
-                                                     ('media', 'quests/' || u[1] || '/__testvideo02.exe');
+  insert into storage.objects(bucket_id, name) values ('media', 'quests/' || u[1] || '/testvideo01.mp4'),
+                                                     ('media', 'quests/' || u[1] || '/testvideo02.exe');
   begin
-    perform public.claim_quest(v_quest, 'exe', 'quests/' || u[1] || '/__testvideo02.exe');
+    perform public.claim_quest(v_quest, 'exe', 'quests/' || u[1] || '/testvideo02.exe');
     insert into _report(test, ok) values ('preuve : fichier non vidéo refusé', false);
   exception when others then
     insert into _report(test, ok) values ('preuve : fichier non vidéo refusé', true);
   end;
-  r := public.claim_quest(v_quest, 'vidéo', 'quests/' || u[1] || '/__testvideo01.mp4');
+  r := public.claim_quest(v_quest, 'vidéo', 'quests/' || u[1] || '/testvideo01.mp4');
   insert into _report(test, ok) values ('preuve : vidéo acceptée',
     (select photo_path like '%.mp4' from public.quest_claims where quest_id = v_quest and player_id = pid[1]));
   insert into _report(test, ok, detail) values ('preuve : vidéos admises par le stockage (50 Mo)',
     (select file_size_limit >= 52428800 and 'video/mp4' = any(allowed_mime_types) and 'video/quicktime' = any(allowed_mime_types)
        from storage.buckets where id = 'media'), null);
   begin
-    delete from storage.objects where bucket_id = 'media' and name like 'quests/%/\_\_testvideo%';
+    delete from storage.objects where bucket_id = 'media' and name like 'quests/%/testvideo0%';
   exception when others then null;
   end;
   perform set_config('request.jwt.claims', json_build_object('sub', u_org, 'role', 'authenticated')::text, true);
