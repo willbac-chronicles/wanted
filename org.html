@@ -107,6 +107,12 @@
             <button class="primary" id="add-player">Ajouter</button>
           </div>
           <p></p>
+          <label for="pi-url">Lien du Google Sheet des inscriptions</label>
+          <div class="row">
+            <input id="pi-url" placeholder="https://docs.google.com/spreadsheets/d/…" style="flex:1 1 260px;width:auto" />
+            <button class="blue" id="pi-read">Lire le tableau</button>
+          </div>
+          <p class="small muted">Partage le tableau en « Toute personne disposant du lien : lecteur ». Tu peux le relire autant de fois que tu veux : seuls les nouveaux pseudos sont créés, les autres sont ignorés. Toute personne qui a le lien peut lire les noms : ne le diffuse pas.</p>
           <div class="row">
             <button class="blue" id="import-btn">Importer un tableau Excel</button>
             <button id="export-codes">Exporter les codes d'accès</button>
@@ -238,6 +244,6 @@
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=1.5"></script>
+  <script src="assets/org.js?v=1.6"></script>
 </body>
 </html>

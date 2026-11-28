@@ -344,12 +344,19 @@
     try {
       const XLSX = await loadSheetJs();
       const wb = await readWorkbook(XLSX, file);
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      importRows = rowsFromSheet(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }));
+      showPlayerImport(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" }), `« ${file.name} »`);
+    } catch (e) { toast(e.message || "Fichier illisible.", "red"); }
+  };
+
+  // Aperçu commun (fichier ou Google Sheet) : chaque ligne avec son état.
+  function showPlayerImport(matrix, source) {
+    {
+      importRows = rowsFromSheet(matrix);
       const taken = new Set(data.players.map(p => p.pseudo.toLowerCase()));
+      const fresh = importRows.filter(r => r.pseudo && !taken.has(r.pseudo.toLowerCase())).length;
       $("import-preview").innerHTML = `
         <div class="card info">
-          <h3>${icon("upload")} ${importRows.length} ligne(s) lue(s) dans « ${esc(file.name)} »</h3>
+          <h3>${icon("upload")} ${importRows.length} ligne(s) lue(s) dans ${esc(source)} : ${fresh} nouveau(x) joueur(s)</h3>
           <div class="table-wrap"><table>
             <thead><tr><th>Nom</th><th>Pseudo</th><th>État</th></tr></thead>
             <tbody>${importRows.map(r => `<tr><td>${esc(r.nom || "—")}</td><td>${esc(r.pseudo || "—")}</td><td>${
@@ -360,13 +367,51 @@
           </table></div>
           <p></p>
           <div class="row">
-            <button class="primary" id="import-go">Créer les joueurs</button>
+            <button class="primary" id="import-go"${fresh ? "" : " disabled"}>Créer ${fresh} joueur(s)</button>
             <button id="import-cancel">Annuler</button>
           </div>
         </div>`;
       $("import-cancel").onclick = () => { importRows = null; $("import-preview").innerHTML = ""; };
       $("import-go").onclick = doImport;
-    } catch (e) { toast(e.message || "Fichier illisible.", "red"); }
+    }
+  }
+
+  // Lecture d'un Google Sheet partagé par lien (onglet indiqué dans le lien) → matrice de cellules.
+  async function readGoogleSheet(link) {
+    const m = String(link).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{20,})/);
+    if (!m) throw new Error("Colle le lien complet du Google Sheet (docs.google.com/spreadsheets/d/…).");
+    const g = String(link).match(/[#&?]gid=(\d+)/);
+    // Export brut (valeurs telles quelles) ; en secours, l'export « gviz » (peut vider des cellules de type mixte).
+    const urls = [
+      `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv${g ? "&gid=" + g[1] : ""}`,
+      `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv&headers=1${g ? "&gid=" + g[1] : ""}`
+    ];
+    let text = "";
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        const t = await res.text();
+        if (res.ok && t && !/^\s*<(!doctype|html)/i.test(t)) { text = t; break; }
+      } catch (e) { /* adresse suivante */ }
+    }
+    if (!text) {
+      throw new Error("Tableau illisible : vérifie le lien et le partage « Toute personne disposant du lien : lecteur ».");
+    }
+    const XLSX = await loadSheetJs();
+    const wb = XLSX.read(text, { type: "string", raw: true });
+    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" });
+  }
+
+  try { $("pi-url").value = localStorage.getItem("wanted-player-sheet") || ""; } catch (e) { /* ignoré */ }
+  $("pi-read").onclick = async () => {
+    const link = $("pi-url").value.trim();
+    $("pi-read").disabled = true;
+    try {
+      const matrix = await readGoogleSheet(link);
+      try { localStorage.setItem("wanted-player-sheet", link); } catch (e) { /* ignoré */ }
+      showPlayerImport(matrix, "le Google Sheet");
+    } catch (e) { toast(e.message, "red"); }
+    finally { $("pi-read").disabled = false; }
   };
 
   async function doImport() {
@@ -673,33 +718,17 @@
     showQuestImport(source);
   }
 
-  // Lien Google Sheet → export CSV de l'onglet affiché (gid), lisible sans compte si le partage est « lecture par lien ».
-  function sheetCsvUrl(link) {
-    const m = String(link).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]{20,})/);
-    if (!m) return null;
-    const g = String(link).match(/[#&?]gid=(\d+)/);
-    return `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv&headers=1${g ? "&gid=" + g[1] : ""}`;
-  }
   try { $("qi-url").value = localStorage.getItem("wanted-quest-sheet") || ""; } catch (e) { /* ignoré */ }
 
   $("qi-read").onclick = async () => {
     const link = $("qi-url").value.trim();
-    const url = sheetCsvUrl(link);
-    if (!url) { toast("Colle le lien complet du Google Sheet (docs.google.com/spreadsheets/d/…).", "red"); return; }
-    try { localStorage.setItem("wanted-quest-sheet", link); } catch (e) { /* ignoré */ }
     $("qi-read").disabled = true;
     try {
-      const res = await fetch(url, { cache: "no-store" });
-      const text = await res.text();
-      if (!res.ok || /^\s*<(!doctype|html)/i.test(text)) {
-        throw new Error("Tableau illisible : partage-le en « Toute personne disposant du lien : lecteur ».");
-      }
-      const XLSX = await loadSheetJs();
-      const wb = XLSX.read(text, { type: "string", raw: true });
-      await readQuestMatrix(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" }), "le Google Sheet");
-    } catch (e) {
-      toast(/fetch/i.test(e.message) ? "Tableau illisible : vérifie le lien et le partage « Toute personne disposant du lien »." : e.message, "red");
-    } finally { $("qi-read").disabled = false; }
+      const matrix = await readGoogleSheet(link);
+      try { localStorage.setItem("wanted-quest-sheet", link); } catch (e) { /* ignoré */ }
+      await readQuestMatrix(matrix, "le Google Sheet");
+    } catch (e) { toast(e.message, "red"); }
+    finally { $("qi-read").disabled = false; }
   };
 
   $("qi-file-btn").onclick = () => { $("qi-file").value = ""; $("qi-file").click(); };
