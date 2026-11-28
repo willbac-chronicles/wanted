@@ -20,7 +20,7 @@
     reattribution: d => `Nouvelle cible pour ${d.chasseur}`,
     joueur_cree: d => `Joueur créé : ${d.joueur}`,
     import_joueurs: d => `Import : ${d.crees} joueur(s) créé(s), ${d.ignores} ignoré(s)`,
-    import_quetes: d => `Import de quêtes : ${d.crees} créée(s), ${d.maj} mise(s) à jour, ${d.ignores} ignorée(s)`,
+    import_quetes: d => `Import de quêtes : ${d.crees} créée(s), ${d.maj} mise(s) à jour, ${d.ignores} ignorée(s)${d.supprimees ? `, ${d.supprimees} supprimée(s)` : ""}`,
     connexion: d => `${d.joueur} s'est connecté`,
     deconnexion: d => `${d.joueur} s'est déconnecté`,
     connexion_organisateur: () => "Connexion organisateur",
@@ -710,12 +710,18 @@
   }
 
   function showQuestImport(source) {
+    // Le tableau fait foi : nouvelles quêtes créées, existantes mises à jour, absentes supprimées.
     const existing = new Set(questData.quests.map(q => q.title.trim().toLowerCase()));
-    const upd = $("qi-update").checked;
+    const inSheet = new Set(qiRows.filter(r => r.title).map(r => r.title.trim().toLowerCase()));
+    const gone = questData.quests.filter(q => !inSheet.has(q.title.trim().toLowerCase()));
+    const lost = gone.reduce((n, q) => n + Number(q.done || 0), 0);
+    const goneIds = new Set(gone.map(q => q.id));
+    const lostPending = (questData.claims || []).filter(c => c.status === "en_attente" && goneIds.has(c.quest_id)).length;
     const state = r => r.errs.length ? `<span class="badge plain">${esc(r.errs.join(", "))}</span>`
-      : existing.has(r.title.toLowerCase()) ? (upd ? `<span class="badge blue">mise à jour</span>` : `<span class="badge plain">existe déjà</span>`)
+      : existing.has(r.title.toLowerCase()) ? `<span class="badge blue">mise à jour</span>`
       : `<span class="badge green">nouvelle</span>`;
-    const ok = qiRows.filter(r => !r.errs.length && (upd || !existing.has(r.title.toLowerCase())));
+    const ok = qiRows.filter(r => !r.errs.length);
+    const nNew = ok.filter(r => !existing.has(r.title.toLowerCase())).length;
     $("qi-preview").innerHTML = `
       <div class="card info" style="margin-top:12px">
         <h3>${icon("upload")} ${qiRows.length} ligne(s) lue(s) dans ${esc(source)}</h3>
@@ -725,16 +731,21 @@
             <td>${esc(DIFF_LABELS[r.difficulty] || "—")}</td><td>${r.photo_required ? "oui" : "non"}</td><td>${esc(r.player || "tous")}</td>
             <td>${esc(r.round || "toutes")}</td><td>${state(r)}</td></tr>`).join("")}</tbody>
         </table></div>
-        <p class="small muted">Les nouvelles quêtes visibles déclenchent une seule notification aux joueurs. Tu pourras toutes les modifier ensuite ci-dessous.</p>
+        ${gone.length ? `<div class="claim refusee" style="margin-top:10px">
+          <b>${gone.length} quête(s) absente(s) du tableau seront supprimées :</b>
+          <div class="small">${esc(gone.map(q => q.title + (Number(q.done) ? ` (${q.done} validée(s))` : "")).join(" · "))}</div>
+          ${lost ? `<div class="small"><b>Les points de ${lost} validation(s) seront retirés aux joueurs.</b></div>` : ""}
+          ${lostPending ? `<div class="small"><b>${lostPending} déclaration(s) en attente seront perdues.</b></div>` : ""}
+        </div>` : ""}
+        <p class="small muted">${nNew} nouvelle(s), ${ok.length - nNew} mise(s) à jour, ${gone.length} suppression(s). Les nouvelles quêtes visibles déclenchent une seule notification aux joueurs. Une ligne en erreur ne supprime pas la quête du même titre.</p>
         <div class="row">
-          <button class="primary" id="qi-go"${ok.length ? "" : " disabled"}>Importer ${ok.length} quête(s)</button>
+          <button class="${gone.length ? "danger" : "primary"}" id="qi-go"${ok.length ? "" : " disabled"}>Appliquer le tableau</button>
           <button id="qi-cancel">Annuler</button>
         </div>
       </div>`;
     $("qi-cancel").onclick = () => { qiRows = null; $("qi-preview").innerHTML = ""; };
     $("qi-go").onclick = doQuestImport;
   }
-  $("qi-update").onchange = () => { if (qiRows) showQuestImport(qiSource); };
   let qiSource = "";
 
   async function readQuestMatrix(matrix, source) {
@@ -790,12 +801,13 @@
       photo_required: r.photo_required, player: r.player, round: r.round, active: r.active }));
     $("qi-go").disabled = true;
     try {
-      const res = await rpc("org_import_quests", { p_rows: rows, p_update: $("qi-update").checked });
+      const keep = qiRows.filter(r => r.errs.length && r.title).map(r => r.title);
+      const res = await rpc("org_import_quests", { p_rows: rows, p_update: true, p_sync: true, p_keep: keep });
       const bad = qiRows.filter(r => r.errs.length).length;
       qiRows = null;
       $("qi-preview").innerHTML = `
         <div class="card info" style="margin-top:12px">
-          <h3>${icon("check")} ${res.created} quête(s) créée(s)${res.updated ? `, ${res.updated} mise(s) à jour` : ""}</h3>
+          <h3>${icon("check")} ${res.created} quête(s) créée(s)${res.updated ? `, ${res.updated} mise(s) à jour` : ""}${(res.deleted || []).length ? `, ${res.deleted.length} supprimée(s)` : ""}</h3>
           ${res.skipped.length || bad ? `<p class="small">Ignorées : ${esc(res.skipped.map(s => `${s.titre || "ligne " + s.ligne} (${s.motif})`).concat(bad ? [`${bad} ligne(s) avec une erreur`] : []).join(" · "))}</p>` : ""}
           <button id="qi-close">Fermer</button>
         </div>`;

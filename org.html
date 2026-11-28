@@ -182,7 +182,7 @@
 
         <section class="card">
           <h2>Importer des quêtes</h2>
-          <p class="small muted">Depuis un Google Sheet partagé en lecture (« Toute personne disposant du lien »), ou depuis un fichier Excel, LibreOffice ou CSV.
+          <p class="small muted">Depuis un Google Sheet partagé en lecture (« Toute personne disposant du lien »), ou depuis un fichier Excel, LibreOffice ou CSV. Le tableau fait foi : chaque import crée les nouvelles quêtes, met à jour celles de même titre et supprime celles qui n'y sont plus.
             Colonnes : <b>Titre</b>, Description, Points, Difficulté (facile, modérée, difficile), Photo obligatoire (oui/non), Pour (pseudo, vide = tout le monde), Manche (1, 2, vide = toutes), Visible (oui/non).
             Seul le titre est obligatoire.</p>
           <label for="qi-url">Lien du Google Sheet</label>
@@ -197,7 +197,6 @@
             <button id="qi-export">Exporter les quêtes</button>
             <input type="file" id="qi-file" accept=".xlsx,.xls,.ods,.csv" class="hidden" />
           </div>
-          <label class="check"><input type="checkbox" id="qi-update" /> Mettre à jour les quêtes déjà présentes (même titre)</label>
           <div id="qi-preview"></div>
         </section>
 
@@ -249,6 +248,6 @@
   <script>document.getElementById("header-elf").innerHTML = window.W.elf(2);</script>
   <script src="assets/geo.js?v=0.6"></script>
   <script src="assets/chat.js?v=0.9"></script>
-  <script src="assets/org.js?v=1.7"></script>
+  <script src="assets/org.js?v=1.8"></script>
 </body>
 </html>

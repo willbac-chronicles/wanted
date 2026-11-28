@@ -1775,7 +1775,11 @@ end $$;
 -- Lignes : title, description, points, difficulty, photo_required, player (pseudo ou vide), round, active.
 -- Titre déjà présent (sans tenir compte des majuscules) : mis à jour si p_update, sinon ignoré.
 -- Une seule notification aux joueurs pour l'ensemble des nouvelles quêtes (pas une par quête).
-create or replace function public.org_import_quests(p_rows jsonb, p_update boolean default false)
+-- p_sync : le tableau fait foi. Les quêtes dont le titre n'est ni dans le tableau ni dans p_keep
+-- (lignes du tableau écartées par l'aperçu) sont supprimées, avec les points qu'elles avaient rapportés.
+drop function if exists public.org_import_quests(jsonb, boolean);
+create or replace function public.org_import_quests(p_rows jsonb, p_update boolean default false,
+                                                    p_sync boolean default false, p_keep jsonb default '[]'::jsonb)
 returns json language plpgsql volatile security definer
 set search_path = public
 as $$
@@ -1788,9 +1792,14 @@ declare
   v_new_all int := 0;
   v_new_personal uuid[] := '{}';
   v_titles text[] := '{}';
+  v_keep text[];
+  v_deleted jsonb := '[]'::jsonb;
 begin
   perform public._require_org();
   if jsonb_typeof(p_rows) <> 'array' then raise exception 'Liste de quêtes attendue'; end if;
+  select coalesce(array_agg(lower(trim(x))), '{}') into v_keep
+    from jsonb_array_elements_text(case when jsonb_typeof(p_keep) = 'array' then p_keep else '[]'::jsonb end) x
+   where trim(x) <> '';
   if jsonb_array_length(p_rows) > 300 then raise exception '300 quêtes au maximum par import'; end if;
   for r in select * from jsonb_array_elements(p_rows) loop
     v_line := v_line + 1;
@@ -1860,6 +1869,22 @@ begin
     end if;
   end loop;
 
+  if p_sync then
+    -- Garde-fou : un tableau vide (ou mal lu) ne doit pas effacer toutes les quêtes.
+    if coalesce(array_length(v_titles, 1), 0) + coalesce(array_length(v_keep, 1), 0) = 0 then
+      raise exception 'Le tableau ne contient aucune quête : rien n''a été supprimé';
+    end if;
+    select coalesce(jsonb_agg(left(trim(title), 80) order by id), '[]'::jsonb) into v_deleted
+      from public.quests
+     where not (lower(left(trim(title), 80)) = any(v_titles) or lower(trim(title)) = any(v_keep));
+    delete from public.score_events
+     where reason = 'quête' and ref in (
+       select c.id::text from public.quest_claims c join public.quests q on q.id = c.quest_id
+        where not (lower(left(trim(q.title), 80)) = any(v_titles) or lower(trim(q.title)) = any(v_keep)));
+    delete from public.quests
+     where not (lower(left(trim(title), 80)) = any(v_titles) or lower(trim(title)) = any(v_keep));
+  end if;
+
   if v_new_all > 0 then
     perform public._push(null, 'quete',
       case when v_new_all = 1 then 'Nouvelle quête' else v_new_all || ' nouvelles quêtes' end,
@@ -1870,8 +1895,9 @@ begin
       'Ouvre l''onglet Quêtes de Wanted.', 'quete-import-perso', false, now(), now() + interval '30 minutes');
   end loop;
   perform public._log('import_quetes', jsonb_build_object(
-    'crees', v_created, 'maj', v_updated, 'ignores', jsonb_array_length(v_skipped)));
-  return json_build_object('created', v_created, 'updated', v_updated, 'skipped', v_skipped);
+    'crees', v_created, 'maj', v_updated, 'ignores', jsonb_array_length(v_skipped),
+    'supprimees', jsonb_array_length(v_deleted)));
+  return json_build_object('created', v_created, 'updated', v_updated, 'skipped', v_skipped, 'deleted', v_deleted);
 end $$;
 
 create or replace function public.org_delete_quest(p_id bigint)

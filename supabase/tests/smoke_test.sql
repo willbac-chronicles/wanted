@@ -404,6 +404,22 @@ begin
   r := public.org_import_quests(jsonb_build_array(jsonb_build_object('title', '__test_import B', 'points', 5)), true);
   insert into _report(test, ok, detail) values ('import de quêtes : mise à jour par titre',
     (r->>'updated')::int = 1 and (select points = 5 and round is null from public.quests where title = '__test_import B'), r::text);
+  -- Synchronisation : le tableau fait foi, les quêtes absentes sont supprimées (sauf celles écartées par l'aperçu).
+  r := public.org_import_quests(jsonb_build_array(jsonb_build_object('title', '__test_import B', 'points', 4)),
+                                true, true, jsonb_build_array('Avec photo'));
+  insert into _report(test, ok, detail) values ('import synchronisé : absentes supprimées, gardées conservées',
+    not exists (select 1 from public.quests where title = '__test_import A')
+    and exists (select 1 from public.quests where id = v_quest)
+    and (select points = 4 from public.quests where title = '__test_import B')
+    and (select count(*) from public.quests) = 2
+    and json_array_length(r->'deleted') >= 1, r::text);
+  begin
+    perform public.org_import_quests('[]'::jsonb, true, true);
+    insert into _report(test, ok) values ('import synchronisé : tableau vide refusé', false);
+  exception when others then
+    insert into _report(test, ok) values ('import synchronisé : tableau vide refusé',
+      (select count(*) from public.quests) = 2);
+  end;
   delete from public.quests where title like '\_\_test\_import%';
   perform set_config('request.jwt.claims', json_build_object('sub', u[1], 'role', 'authenticated')::text, true);
   begin
